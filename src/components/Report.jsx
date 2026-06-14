@@ -131,7 +131,7 @@ export default function Report({ products }) {
     ...(needReorder.length > 0
       ? needReorder.map(p => {
           const flag = getStatus(p) === 'critical' ? '[CRITICAL]' : '[LOW]     '
-          return `  ${flag} ${p.name.padEnd(26)} have ${String(p.qty).padStart(3)}  `
+          return `  ${flag} ${p.name.padEnd(26)} have ${String(p.qty).padStart(3)} ${p.unit}`
         })
       : ['  ✓ All products are sufficiently stocked.']),
     '',

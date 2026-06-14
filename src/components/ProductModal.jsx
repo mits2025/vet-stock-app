@@ -1,6 +1,6 @@
 import { useState } from 'react'
 
-const CATS = ['Medicine', 'Vaccine', 'Supplies', 'Food', 'Equipment']
+const CATS = ['Medicine', 'Vaccine', 'Test Kits', 'Supplies', 'Food', 'Equipment']
 
 export default function ProductModal({ product, onSave, onClose }) {
   const isEdit = !!product
