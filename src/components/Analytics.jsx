@@ -11,7 +11,7 @@ import {
   PointElement,
   Tooltip,
 } from 'chart.js'
-import { getStatus } from './Dashboard'
+import { getStatus } from '../utils/status'
 
 ChartJS.register(
   ArcElement,
@@ -184,6 +184,29 @@ export default function Analytics({ products }) {
     .sort((a, b) => a.averageWeeklyUsage - b.averageWeeklyUsage)
     .slice(0, 6)
   const slowMoving = productMetrics.filter(product => product.totalUsed === 0)
+  const categoryMovingAverages = Object.values(productMetrics.reduce((categories, product) => {
+    const category = product.cat || 'Uncategorized'
+    if (!categories[category]) {
+      categories[category] = {
+        category,
+        products: [],
+      }
+    }
+    categories[category].products.push(product)
+    return categories
+  }, {}))
+    .map(group => {
+      const usedProducts = group.products.filter(product => product.averageWeeklyUsage > 0)
+      const totalUsed = group.products.reduce((sum, product) => sum + product.totalUsed, 0)
+      return {
+        ...group,
+        totalUsed,
+        usedProducts: [...usedProducts].sort((a, b) => b.averageWeeklyUsage - a.averageWeeklyUsage),
+        fastMovingRanked: [...usedProducts].sort((a, b) => b.averageWeeklyUsage - a.averageWeeklyUsage),
+        leastMovingRanked: [...usedProducts].sort((a, b) => a.averageWeeklyUsage - b.averageWeeklyUsage),
+      }
+    })
+    .sort((a, b) => b.totalUsed - a.totalUsed || a.category.localeCompare(b.category))
   const runningLow = [...productMetrics]
     .filter(product => product.weeksRemaining !== null)
     .sort((a, b) => a.weeksRemaining - b.weeksRemaining)
@@ -239,11 +262,22 @@ export default function Analytics({ products }) {
           `  ${index + 1}. ${product.name}: ${product.averageWeeklyUsage.toFixed(1)} ${product.unit} average per count`)
       : ['  No usage recorded in this period.']),
     '',
-    'MONTHLY RESTOCK SUMMARY',
-    ...(monthlyRestocks.length > 0
-      ? [...monthlyRestocks].reverse().map(month =>
-          `  ${month.label}: ${month.restocks.length} ${month.restocks.length === 1 ? 'delivery' : 'deliveries'}`)
-      : ['  No restocks recorded in this period.']),
+    'CATEGORY PRODUCT MOVING AVERAGES',
+    ...(categoryMovingAverages.length > 0
+      ? categoryMovingAverages.flatMap(group => [
+          `  ${group.category}: ${group.totalUsed} units used across ${group.usedProducts.length} moving ${group.usedProducts.length === 1 ? 'item' : 'items'}`,
+          ...(group.usedProducts.length > 0
+            ? [
+                '    Fast-moving ranking:',
+                ...group.fastMovingRanked.slice(0, 5).map((product, index) =>
+                  `      ${index + 1}. ${product.name}: ${product.averageWeeklyUsage.toFixed(1)} ${product.unit} average; ${product.totalUsed} used`),
+                '    Least-moving ranking:',
+                ...group.leastMovingRanked.slice(0, 5).map((product, index) =>
+                  `      ${index + 1}. ${product.name}: ${product.averageWeeklyUsage.toFixed(1)} ${product.unit} average; ${product.totalUsed} used`)
+              ]
+            : ['    No product usage recorded in this category.']),
+        ])
+      : ['  No categories found.']),
     '',
     'RESTOCK RECOMMENDATIONS',
     ...(planningProducts.filter(product => product.suggestedRestock > 0).length > 0
@@ -372,39 +406,6 @@ export default function Analytics({ products }) {
         </div>
       </div>
 
-      <div style={cardStyle}>
-        {sectionTitle('Monthly restock summary')}
-        {datedRestocks.length > 0 ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {[...monthlyRestocks].reverse().map(month => (
-              <div key={month.key} style={{ border: '1px solid #eee', borderRadius: 8, overflow: 'hidden' }}>
-                <div style={{ background: '#E1F5EE', color: '#0F6E56', padding: '7px 10px', fontSize: 12, fontWeight: 700 }}>
-                  {month.label} - {month.restocks.length} {month.restocks.length === 1 ? 'restock' : 'restocks'}
-                </div>
-                {month.restocks
-                  .sort((a, b) => validDate(b.date) - validDate(a.date))
-                  .map(entry => (
-                    <div key={`${entry.productId}-${entry.index}`} style={{
-                      display: 'grid', gridTemplateColumns: '100px minmax(140px, 1fr) auto',
-                      gap: 10, alignItems: 'center', padding: '8px 10px',
-                      borderTop: '1px solid #f2f2f2', fontSize: 12
-                    }}>
-                      <span style={{ color: '#888' }}>
-                        {validDate(entry.date).toLocaleDateString('en-PH', { month: 'short', day: 'numeric' })}
-                      </span>
-                      <span>
-                        <strong>{entry.productName}</strong>
-                        <span style={{ display: 'block', color: '#999', marginTop: 2 }}>{entry.note || 'Restocked'}</span>
-                      </span>
-                      <strong style={{ color: '#0F6E56', textAlign: 'right' }}>+{entry.added} {entry.unit}</strong>
-                    </div>
-                  ))}
-              </div>
-            ))}
-          </div>
-        ) : <div style={{ color: '#aaa', fontSize: 13 }}>No restocks recorded in the selected period.</div>}
-      </div>
-
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(280px,1fr))', gap: 14 }}>
         <div style={cardStyle}>
           {sectionTitle('Fast-moving products - highest average usage')}
@@ -453,6 +454,55 @@ export default function Analytics({ products }) {
             </div>
           )) : <div style={{ color: '#aaa', fontSize: 13 }}>Record usage to estimate weeks remaining.</div>}
         </div>
+      </div>
+
+      <div style={cardStyle}>
+        {sectionTitle('Category product moving averages')}
+        {categoryMovingAverages.length > 0 ? (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(260px,1fr))', gap: 12 }}>
+            {categoryMovingAverages.map(group => (
+              <div key={group.category} style={{ border: '1px solid #eee', borderRadius: 8, overflow: 'hidden' }}>
+                <div style={{
+                  display: 'flex', justifyContent: 'space-between', gap: 10,
+                  padding: '8px 10px', background: '#F7FAFC', borderBottom: '1px solid #eee'
+                }}>
+                  <strong style={{ fontSize: 13, color: '#333' }}>{group.category}</strong>
+                  <span style={{ fontSize: 11, color: '#888' }}>{group.totalUsed} used</span>
+                </div>
+                <div style={{ padding: 10, borderBottom: '1px solid #f2f2f2' }}>
+                  <div style={{ fontSize: 11, color: '#185FA5', fontWeight: 700, marginBottom: 4 }}>Items moving</div>
+                  <strong style={{ fontSize: 18, color: '#185FA5' }}>{group.usedProducts.length}</strong>
+                </div>
+                {group.usedProducts.length > 0 ? (
+                  <div style={{ padding: '8px 10px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 12 }}>
+                      <div>
+                        <div style={{ fontSize: 11, color: '#0F6E56', fontWeight: 700, marginBottom: 6 }}>Fast-moving ranking</div>
+                        {group.fastMovingRanked.slice(0, 5).map((product, index) => (
+                          <div key={product.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, padding: '4px 0', fontSize: 12 }}>
+                            <span>{index + 1}. {product.name}</span>
+                            <strong style={{ color: '#0F6E56', whiteSpace: 'nowrap' }}>{product.averageWeeklyUsage.toFixed(1)} avg</strong>
+                          </div>
+                        ))}
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 11, color: '#BA7517', fontWeight: 700, marginBottom: 6 }}>Least-moving ranking</div>
+                        {group.leastMovingRanked.slice(0, 5).map((product, index) => (
+                          <div key={product.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, padding: '4px 0', fontSize: 12 }}>
+                            <span>{index + 1}. {product.name}</span>
+                            <strong style={{ color: '#BA7517', whiteSpace: 'nowrap' }}>{product.averageWeeklyUsage.toFixed(1)} avg</strong>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ padding: '10px', color: '#aaa', fontSize: 12 }}>No product usage recorded in this category.</div>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : <div style={{ color: '#aaa', fontSize: 13 }}>No categories found.</div>}
       </div>
 
       <div style={cardStyle}>

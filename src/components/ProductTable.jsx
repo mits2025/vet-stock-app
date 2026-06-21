@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { getStatus } from './Dashboard'
+import { getStatus } from '../utils/status'
 
 const statusStyle = {
   ok:       { background: '#E1F5EE', color: '#085041' },

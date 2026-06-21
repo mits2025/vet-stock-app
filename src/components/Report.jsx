@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { getStatus } from './Dashboard'
+import { getStatus } from '../utils/status'
 
 export default function Report({ products }) {
   const [copied, setCopied] = useState(false)
