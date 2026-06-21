@@ -220,6 +220,30 @@ export default function Analytics({ products }) {
       if (b.weeksRemaining === null) return -1
       return a.weeksRemaining - b.weeksRemaining
     })
+  const suggestedRestockByCategory = Object.values(planningProducts
+    .filter(product => product.suggestedRestock > 0)
+    .reduce((categories, product) => {
+      const category = product.cat || 'Uncategorized'
+      if (!categories[category]) {
+        categories[category] = {
+          category,
+          products: [],
+          totalSuggested: 0,
+        }
+      }
+      categories[category].products.push(product)
+      categories[category].totalSuggested += product.suggestedRestock
+      return categories
+    }, {}))
+    .map(group => ({
+      ...group,
+      products: group.products.sort((a, b) => {
+        if (a.weeksRemaining === null) return 1
+        if (b.weeksRemaining === null) return -1
+        return a.weeksRemaining - b.weeksRemaining
+      }),
+    }))
+    .sort((a, b) => b.totalSuggested - a.totalSuggested || a.category.localeCompare(b.category))
 
   const cardStyle = {
     background: '#fff', border: '1px solid #eee',
@@ -280,12 +304,13 @@ export default function Analytics({ products }) {
       : ['  No categories found.']),
     '',
     'RESTOCK RECOMMENDATIONS',
-    ...(planningProducts.filter(product => product.suggestedRestock > 0).length > 0
-      ? planningProducts
-          .filter(product => product.suggestedRestock > 0)
-          .map(product =>
-            `  ${product.name}` +
-            (product.weeksRemaining === null ? '' : ` (${product.weeksRemaining.toFixed(1)} weeks remaining)`))
+    ...(suggestedRestockByCategory.length > 0
+      ? suggestedRestockByCategory.flatMap(group => [
+          `  ${group.category}: ${group.products.length} ${group.products.length === 1 ? 'item' : 'items'} to restock`,
+          ...group.products.map(product =>
+            `    - ${product.name}: +${product.suggestedRestock} ${product.unit}` +
+            (product.weeksRemaining === null ? ' (no usage data)' : ` (${product.weeksRemaining.toFixed(1)} weeks remaining)`))
+        ])
       : ['  No products currently need a suggested restock.']),
     reportLine,
   ].join('\n')
@@ -506,39 +531,45 @@ export default function Analytics({ products }) {
       </div>
 
       <div style={cardStyle}>
-        {sectionTitle('Restock planning - target: 4 weeks')}
-        {planningProducts.length > 0 ? (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-              <thead>
-                <tr style={{ background: '#fafafa' }}>
-                  {['Product', 'Current stock', 'Avg. weekly use', 'Weeks remaining', 'Suggested restock', 'Status'].map(header => (
-                    <th key={header} style={{ textAlign: 'left', padding: '8px 10px', borderBottom: '1px solid #eee', fontSize: 12, color: '#888', fontWeight: 500, whiteSpace: 'nowrap' }}>{header}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {planningProducts.map(product => {
+        {sectionTitle('Suggested restock planning by category - target: 4 weeks')}
+        {suggestedRestockByCategory.length > 0 ? (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(280px,1fr))', gap: 12 }}>
+            {suggestedRestockByCategory.map(group => (
+              <div key={group.category} style={{ border: '1px solid #eee', borderRadius: 8, overflow: 'hidden' }}>
+                <div style={{
+                  display: 'flex', justifyContent: 'space-between', gap: 10,
+                  background: '#F7FAFC', borderBottom: '1px solid #eee', padding: '8px 10px'
+                }}>
+                  <strong style={{ fontSize: 13, color: '#333' }}>{group.category}</strong>
+                  <span style={{ fontSize: 11, color: '#185FA5', fontWeight: 700 }}>
+                    {group.products.length} {group.products.length === 1 ? 'item' : 'items'}
+                  </span>
+                </div>
+                {group.products.map(product => {
                   const status = getStatus(product)
                   return (
-                    <tr key={product.id} style={{ borderBottom: '1px solid #f5f5f5' }}>
-                      <td style={{ padding: '8px 10px', fontWeight: 500 }}>{product.name}</td>
-                      <td style={{ padding: '8px 10px' }}>{product.qty} {product.unit}</td>
-                      <td style={{ padding: '8px 10px' }}>{product.averageWeeklyUsage.toFixed(1)} {product.unit}</td>
-                      <td style={{ padding: '8px 10px', color: product.weeksRemaining !== null && product.weeksRemaining < 2 ? '#A32D2D' : '#555', fontWeight: 600 }}>
-                        {product.weeksRemaining === null ? 'No usage data' : `${product.weeksRemaining.toFixed(1)} weeks`}
-                      </td>
-                      <td style={{ padding: '8px 10px', color: product.suggestedRestock > 0 ? '#185FA5' : '#888', fontWeight: 700 }}>
-                        {product.suggestedRestock > 0 ? `+${product.suggestedRestock} ${product.unit}` : 'Enough stock'}
-                      </td>
-                      <td style={{ padding: '8px 10px', textTransform: 'capitalize' }}>{status}</td>
-                    </tr>
+                    <div key={product.id} style={{ padding: '9px 10px', borderTop: '1px solid #f5f5f5', fontSize: 12 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginBottom: 4 }}>
+                        <strong style={{ color: '#333' }}>{product.name}</strong>
+                        <strong style={{ color: '#185FA5', whiteSpace: 'nowrap' }}>+{product.suggestedRestock} {product.unit}</strong>
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8, color: '#666' }}>
+                        <span>Stock: {product.qty} {product.unit}</span>
+                        <span>Avg: {product.averageWeeklyUsage.toFixed(1)}</span>
+                        <span style={{ color: product.weeksRemaining !== null && product.weeksRemaining < 2 ? '#A32D2D' : '#666', fontWeight: 600 }}>
+                          {product.weeksRemaining === null ? 'No usage data' : `${product.weeksRemaining.toFixed(1)} wks`}
+                        </span>
+                      </div>
+                      <div style={{ color: status === 'critical' ? '#A32D2D' : status === 'low' ? '#BA7517' : '#888', fontSize: 11, marginTop: 5, textTransform: 'capitalize' }}>
+                        {status}
+                      </div>
+                    </div>
                   )
                 })}
-              </tbody>
-            </table>
+              </div>
+            ))}
           </div>
-        ) : <div style={{ color: '#0F6E56', fontSize: 13 }}>No products currently need restock planning.</div>}
+        ) : <div style={{ color: '#0F6E56', fontSize: 13 }}>No products currently need suggested restock planning.</div>}
       </div>
 
       {(staleProducts.length > 0 || slowMoving.length > 0) && (
