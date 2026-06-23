@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { getStatus } from '../utils/status'
+import { getUsageInLastDays } from '../utils/usage'
 
 const statusStyle = {
   ok:       { background: '#E1F5EE', color: '#085041' },
@@ -8,6 +9,7 @@ const statusStyle = {
 }
 
 const statusLabel = { ok: 'OK', low: 'Low stock', critical: 'Critical' }
+const withUnit = (value, unit) => unit ? `${value} ${unit}` : String(value)
 
 export default function ProductTable({ products, onEdit, onDelete, onRestock, onUndo }) {
   const [search, setSearch]             = useState('')
@@ -64,7 +66,7 @@ export default function ProductTable({ products, onEdit, onDelete, onRestock, on
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
             <tr style={{ background: '#f9f9f9' }}>
-              {['Product', 'Category', 'Qty', 'Unit', 'Reorder at', 'Used this week', 'Status', 'Actions'].map(h => (
+              {['Product', 'Category', 'Qty', 'Unit', 'Price', 'Reorder at', 'Used this week', 'Status', 'Actions'].map(h => (
                 <th key={h} style={{ textAlign: 'left', padding: '9px 12px', borderBottom: '1px solid #eee', fontWeight: 500, color: '#666', fontSize: 12, whiteSpace: 'nowrap' }}>{h}</th>
               ))}
             </tr>
@@ -72,12 +74,13 @@ export default function ProductTable({ products, onEdit, onDelete, onRestock, on
           <tbody>
             {filtered.length === 0 ? (
               <tr>
-                <td colSpan={8} style={{ padding: '2rem', textAlign: 'center', color: '#aaa' }}>No products match your filters.</td>
+                <td colSpan={9} style={{ padding: '2rem', textAlign: 'center', color: '#aaa' }}>No products match your filters.</td>
               </tr>
             ) : filtered.map(p => {
               const s            = getStatus(p)
-              const usedThisWeek = Math.max(0, (p.lastQty || p.qty) - p.qty)
-              const needsRestock = s === 'low' || s === 'critical'
+              const usedThisWeek = getUsageInLastDays(p)
+              const tracksStock = p.trackStock !== false
+              const needsRestock = tracksStock && (s === 'low' || s === 'critical')
 
               return (
                 <tr key={p.id} style={{ borderBottom: '1px solid #f5f5f5', background: s === 'critical' ? '#fff9f9' : 'transparent' }}>
@@ -85,11 +88,16 @@ export default function ProductTable({ products, onEdit, onDelete, onRestock, on
                   <td style={{ padding: '9px 12px' }}>
                     <span style={{ background: '#f0f0f0', color: '#555', padding: '2px 8px', borderRadius: 20, fontSize: 11, fontWeight: 500 }}>{p.cat}</span>
                   </td>
-                  <td style={{ padding: '9px 12px', fontWeight: 700, color: s === 'critical' ? '#A32D2D' : s === 'low' ? '#BA7517' : '#1a1a1a' }}>{p.qty}</td>
-                  <td style={{ padding: '9px 12px', color: '#888' }}>{p.unit}</td>
-                  <td style={{ padding: '9px 12px', color: '#888' }}>{p.reorder}</td>
+                  <td style={{ padding: '9px 12px', fontWeight: 700, color: s === 'critical' ? '#A32D2D' : s === 'low' ? '#BA7517' : '#1a1a1a' }}>
+                    {tracksStock ? p.qty : 'Service'}
+                  </td>
+                  <td style={{ padding: '9px 12px', color: '#888' }}>{tracksStock ? (p.unit || '—') : '—'}</td>
+                  <td style={{ padding: '9px 12px', color: Number(p.price) > 0 ? '#333' : '#aaa', fontWeight: Number(p.price) > 0 ? 600 : 400 }}>
+                    {Number(p.price) > 0 ? `PHP ${Number(p.price).toFixed(2)}` : 'No price'}
+                  </td>
+                  <td style={{ padding: '9px 12px', color: '#888' }}>{tracksStock ? p.reorder : '—'}</td>
                   <td style={{ padding: '9px 12px', color: usedThisWeek > 0 ? '#0F6E56' : '#bbb', fontWeight: usedThisWeek > 0 ? 600 : 400 }}>
-                    {usedThisWeek > 0 ? `${usedThisWeek} ${p.unit}` : '—'}
+                    {usedThisWeek > 0 ? withUnit(usedThisWeek, p.unit) : '—'}
                   </td>
                   <td style={{ padding: '9px 12px' }}>
                     <span style={{ ...statusStyle[s], padding: '3px 9px', borderRadius: 20, fontSize: 11, fontWeight: 500 }}>
@@ -98,20 +106,22 @@ export default function ProductTable({ products, onEdit, onDelete, onRestock, on
                   </td>
                   <td style={{ padding: '9px 12px', whiteSpace: 'nowrap' }}>
                     {/* Restock button — highlighted when low or critical */}
-                    <button
-                      onClick={() => onRestock(p)}
-                      style={{
-                        marginRight: 4, padding: '4px 10px',
-                        border: needsRestock ? '1px solid #185FA5' : '1px solid #ddd',
-                        borderRadius: 6, cursor: 'pointer', fontSize: 12,
-                        background: needsRestock ? '#185FA5' : '#fff',
-                        color:      needsRestock ? '#fff'     : '#444',
-                        fontWeight: needsRestock ? 600        : 400,
-                      }}
-                      title="Add received stock to current quantity"
-                    >
-                      + Restock
-                    </button>
+                    {tracksStock && (
+                      <button
+                        onClick={() => onRestock(p)}
+                        style={{
+                          marginRight: 4, padding: '4px 10px',
+                          border: needsRestock ? '1px solid #185FA5' : '1px solid #ddd',
+                          borderRadius: 6, cursor: 'pointer', fontSize: 12,
+                          background: needsRestock ? '#185FA5' : '#fff',
+                          color:      needsRestock ? '#fff'     : '#444',
+                          fontWeight: needsRestock ? 600        : 400,
+                        }}
+                        title="Add received stock to current quantity"
+                      >
+                        + Restock
+                      </button>
+                    )}
                     <button onClick={() => onEdit(p)}
                       style={{ marginRight: 4, padding: '4px 10px', border: '1px solid #ddd', borderRadius: 6, cursor: 'pointer', background: '#fff', fontSize: 12 }}>
                       Edit

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { getStatus } from '../utils/status'
+import { getUsageInLastDays, USAGE_WINDOW_DAYS } from '../utils/usage'
 
 export default function Report({ products }) {
   const [copied, setCopied] = useState(false)
@@ -14,10 +15,10 @@ export default function Report({ products }) {
       : parsed.toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' })
   }
 
-  // This week = lastQty - qty (the most recent Friday count diff per product)
+  // This week is a rolling 7-day usage window from saved stock-count events.
   const withWeek = products.map(p => ({
     ...p,
-    usedThisWeek: Math.max(0, (p.lastQty || p.qty) - p.qty)
+    usedThisWeek: getUsageInLastDays(p)
   }))
 
   const soldThisWeek   = withWeek.reduce((a, p) => a + p.usedThisWeek, 0)
@@ -105,16 +106,16 @@ export default function Report({ products }) {
     `  Critical              : ${crit}`,
     `  Restock events        : ${restockHistory.length}`,
     `  Total restocked       : ${restockTotalText}`,
-    `  Used THIS WEEK        : ${soldThisWeek} units  ← current week only`,
+    `  Used LAST ${USAGE_WINDOW_DAYS} DAYS     : ${soldThisWeek} units`,
     `  Used all time (total) : ${soldAllTime} units `,
     '',
     line,
-    'TOP 5 MOST USED — THIS WEEK',
+    `TOP 5 MOST USED - LAST ${USAGE_WINDOW_DAYS} DAYS`,
     line,
     ...(topThisWeek.length > 0
       ? topThisWeek.map((p, i) =>
-          `  ${i + 1}. ${p.name.padEnd(30)} ${String(p.usedThisWeek).padStart(4)} ${p.unit}  (this week)`)
-      : ['  No usage recorded this week yet.',
+          `  ${i + 1}. ${p.name.padEnd(30)} ${String(p.usedThisWeek).padStart(4)} ${p.unit}  (last ${USAGE_WINDOW_DAYS} days)`)
+      : [`  No usage recorded in the last ${USAGE_WINDOW_DAYS} days yet.`,
          '  Update stock counts via Edit to track weekly usage.']),
     '',
     line,
@@ -158,7 +159,7 @@ export default function Report({ products }) {
         .map(p => {
           const s       = getStatus(p)
           const flag    = s === 'critical' ? '  ⚠ CRITICAL' : s === 'low' ? '  ↓ LOW' : ''
-          const weekStr = p.usedThisWeek > 0 ? `  (-${p.usedThisWeek} this wk)` : ''
+          const weekStr = p.usedThisWeek > 0 ? `  (-${p.usedThisWeek} last ${USAGE_WINDOW_DAYS}d)` : ''
           return `    ${p.name.padEnd(28)} ${String(p.qty).padStart(4)} ${p.unit}${weekStr}${flag}`
         })
     ]),
@@ -213,7 +214,7 @@ export default function Report({ products }) {
           { label: 'OK',             value: ok,              color: '#0F6E56', sub: null },
           { label: 'Low',            value: low,             color: '#BA7517', sub: null },
           { label: 'Critical',       value: crit,            color: '#A32D2D', sub: null },
-          { label: 'Used this week', value: soldThisWeek,    color: '#5B21B6', sub: 'units' },
+          { label: `Used last ${USAGE_WINDOW_DAYS} days`, value: soldThisWeek, color: '#5B21B6', sub: 'units' },
           { label: 'Used all time',  value: soldAllTime,     color: '#92400E', sub: 'units' },
           { label: 'Restock events', value: restockHistory.length, color: '#185FA5', sub: null },
         ].map(c => (
@@ -227,9 +228,9 @@ export default function Report({ products }) {
       {/* Inline breakdown: this week vs all time side by side */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
 
-        {/* This week top used */}
+        {/* Rolling 7-day top used */}
         <div style={{ background: '#F3EEFF', border: '1px solid #DDD6FE', borderRadius: 8, padding: '10px 12px' }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: '#5B21B6', marginBottom: 8 }}>📅 Top used — this week</div>
+          <div style={{ fontSize: 12, fontWeight: 600, color: '#5B21B6', marginBottom: 8 }}>Top used - last {USAGE_WINDOW_DAYS} days</div>
           {topThisWeek.length > 0
             ? topThisWeek.map((p, i) => (
                 <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
@@ -237,7 +238,7 @@ export default function Report({ products }) {
                   <span style={{ fontWeight: 600, color: '#5B21B6' }}>{p.usedThisWeek} {p.unit}</span>
                 </div>
               ))
-            : <div style={{ fontSize: 12, color: '#aaa' }}>No usage yet this week.</div>
+            : <div style={{ fontSize: 12, color: '#aaa' }}>No usage in the last {USAGE_WINDOW_DAYS} days.</div>
           }
         </div>
 

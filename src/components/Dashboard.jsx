@@ -1,17 +1,18 @@
 import { getStatus } from '../utils/status'
+import { getUsageInLastDays, USAGE_WINDOW_DAYS } from '../utils/usage'
 
 export default function Dashboard({ products }) {
   const ok           = products.filter(p => getStatus(p) === 'ok').length
   const low          = products.filter(p => getStatus(p) === 'low').length
   const crit         = products.filter(p => getStatus(p) === 'critical').length
   const soldAllTime  = products.reduce((a, p) => a + (p.sold || 0), 0)
-  const soldThisWeek = products.reduce((a, p) => a + Math.max(0, (p.lastQty || p.qty) - p.qty), 0)
+  const soldThisWeek = products.reduce((a, p) => a + getUsageInLastDays(p), 0)
 
   const cards = [
     { label: 'Total products',  value: products.length, color: '#185FA5', sub: null },
     { label: 'In stock (OK)',   value: ok,              color: '#0F6E56', sub: null },
     { label: 'Low / critical',  value: low + crit,      color: '#A32D2D', sub: null },
-    { label: 'Used this week',  value: soldThisWeek,    color: '#5B21B6', sub: 'units — latest count only' },
+    { label: `Used last ${USAGE_WINDOW_DAYS} days`, value: soldThisWeek, color: '#5B21B6', sub: 'units - rolling window' },
     { label: 'Used all time',   value: soldAllTime,     color: '#92400E', sub: 'units — since app started' },
   ]
 
