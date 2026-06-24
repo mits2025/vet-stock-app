@@ -20,6 +20,7 @@ export default function ProductModal({ product, preset = null, products = [], on
   const usedThisWeek = isEdit
     ? getUsageInLastDaysWithPendingCount(form, form.newQty)
     : 0
+  const stockProducts = products.filter(item => item.trackStock !== false && item.id !== product?.id)
 
   function handleSave() {
     if (!form.name.trim()) return alert('Please enter a product name.')
@@ -59,6 +60,8 @@ export default function ProductModal({ product, preset = null, products = [], on
       lastQty:      qtyChanged ? oldQty : (form.lastQty ?? newQty),
       sold:         totalSold,
       reorder:      Number(form.reorder) || 0,
+      consumesProductId: trackStock ? '' : (form.consumesProductId || ''),
+      consumptionPerSale: trackStock ? 0 : Math.max(0, Number(form.consumptionPerSale) || 0),
       // Keep last 10 snapshots only
       countHistory: snapshot
         ? [...prevHistory, snapshot].slice(-10)
@@ -180,10 +183,47 @@ export default function ProductModal({ product, preset = null, products = [], on
             />
           </div>
         ) : (
-          <div style={{ background: '#EAF7F2', border: '1px solid #BFE7D8', borderRadius: 8, padding: '10px 12px', marginBottom: 12 }}>
-            <div style={{ fontSize: 12, color: '#0F6E56', fontWeight: 700 }}>Always available service</div>
-            <div style={{ fontSize: 12, color: '#55756B', marginTop: 2 }}>This item will not use stock quantity or restock alerts.</div>
-          </div>
+          <>
+            <div style={{ background: '#EAF7F2', border: '1px solid #BFE7D8', borderRadius: 8, padding: '10px 12px', marginBottom: 12 }}>
+              <div style={{ fontSize: 12, color: '#0F6E56', fontWeight: 700 }}>Service item</div>
+              <div style={{ fontSize: 12, color: '#55756B', marginTop: 2 }}>Sell this as a service. You can optionally deduct stock from a linked product like vaccine vials.</div>
+            </div>
+
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ display: 'block', fontSize: 12, color: '#666', marginBottom: 4 }}>
+                Consumes stock item <span style={{ color: '#aaa', fontWeight: 400 }}>(optional)</span>
+              </label>
+              <select
+                value={form.consumesProductId || ''}
+                onChange={e => set('consumesProductId', e.target.value)}
+                style={inputStyle}
+              >
+                <option value="">No stock deduction</option>
+                {stockProducts.map(item => (
+                  <option key={item.id} value={item.id}>
+                    {item.name} ({item.qty} {item.unit || 'units'})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {form.consumesProductId && (
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ display: 'block', fontSize: 12, color: '#666', marginBottom: 4 }}>
+                  Stock used per sale <span style={{ color: '#aaa', fontWeight: 400 }}>(example: 0.1 vial per client)</span>
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={form.consumptionPerSale || ''}
+                  onChange={e => set('consumptionPerSale', e.target.value)}
+                  placeholder="0.1"
+                  style={inputStyle}
+                />
+              </div>
+            )}
+          </>
         )}
 
         {/* Unit */}

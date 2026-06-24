@@ -1,33 +1,69 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { getUsageInLastDays } from '../utils/usage'
 
 const money = value => `PHP ${Number(value || 0).toFixed(2)}`
 const withUnit = (value, unit) => unit ? `${value} ${unit}` : String(value)
 const priceLabel = item => item.unit ? `${money(item.price)} / ${item.unit}` : money(item.price)
 const tracksStock = product => product.trackStock !== false
-const initialOrder = { id: 'client-1', label: 'Client 1', cart: [], itemDiscounts: {} }
+const consumesStock = product => product.trackStock === false && product.consumesProductId && Number(product.consumptionPerSale) > 0
+const OVERSTOCK_REORDER_MULTIPLE = 3
+const LOW_USAGE_WEEKLY_THRESHOLD = 1
+const defaultClientLabel = () => `Client ${new Date().toLocaleString('en-PH', {
+  month: 'short',
+  day: 'numeric',
+  hour: 'numeric',
+  minute: '2-digit',
+})}`
 
-export default function POS({ products, sales, onCompleteSale, onEditProduct, onRestockProduct }) {
+export default function POS({ products, sales, clients = [], onCompleteSale, onEditProduct, onRestockProduct, onSaveClient }) {
   const [search, setSearch] = useState('')
   const [activeCategory, setActiveCategory] = useState('All')
-  const [orders, setOrders] = useState([initialOrder])
-  const [activeOrderId, setActiveOrderId] = useState(initialOrder.id)
+  const [orders, setOrders] = useState([])
+  const [activeOrderId, setActiveOrderId] = useState('')
   const [checkoutOpen, setCheckoutOpen] = useState(false)
   const [paymentMethod, setPaymentMethod] = useState('Cash')
+  const [clientModalOpen, setClientModalOpen] = useState(false)
+  const [clientDraftName, setClientDraftName] = useState('')
+  const [clientSuggestionsOpen, setClientSuggestionsOpen] = useState(false)
   const activeOrder = orders.find(order => order.id === activeOrderId) || orders[0]
   const cart = activeOrder?.cart || []
   const itemDiscounts = activeOrder?.itemDiscounts || {}
+  const clientSuggestions = clients
+    .filter(client => {
+      const term = clientDraftName.trim().toLowerCase()
+      return !term || client.name.toLowerCase().includes(term)
+    })
+    .slice(0, 5)
 
   const categories = useMemo(() => {
     const unique = [...new Set(products.map(product => product.cat).filter(Boolean))].sort()
     return ['All', ...unique]
   }, [products])
 
+  const productsById = useMemo(
+    () => products.reduce((map, product) => ({ ...map, [product.id]: product }), {}),
+    [products]
+  )
+
+  const getServiceCapacity = useCallback(product => {
+    if (!consumesStock(product)) return Infinity
+    const source = productsById[product.consumesProductId]
+    const perSale = Number(product.consumptionPerSale) || 0
+    if (!source || perSale <= 0) return 0
+    return Math.floor((Number(source.qty) || 0) / perSale)
+  }, [productsById])
+
+  function getStockSourceLabel(product) {
+    const source = productsById[product.consumesProductId]
+    if (!source) return ''
+    return `${Number(product.consumptionPerSale)} ${source.unit || 'unit'} ${source.name}`
+  }
+
   const counterProducts = useMemo(
-    () => products
+    () => [...products]
       .sort((a, b) => {
-        const aAvailable = !tracksStock(a) || Number(a.qty) > 0
-        const bAvailable = !tracksStock(b) || Number(b.qty) > 0
+        const aAvailable = tracksStock(a) ? Number(a.qty) > 0 : getServiceCapacity(a) > 0
+        const bAvailable = tracksStock(b) ? Number(b.qty) > 0 : getServiceCapacity(b) > 0
         const stockDiff = Number(bAvailable) - Number(aAvailable)
         if (stockDiff !== 0) return stockDiff
 
@@ -39,7 +75,7 @@ export default function POS({ products, sales, onCompleteSale, onEditProduct, on
 
         return a.name.localeCompare(b.name)
       }),
-    [products]
+    [products, getServiceCapacity]
   )
 
   const filteredProducts = counterProducts.filter(product => {
@@ -82,22 +118,35 @@ export default function POS({ products, sales, onCompleteSale, onEditProduct, on
     }))
   }
 
+  function openClientModal() {
+    setClientDraftName('')
+    setClientSuggestionsOpen(false)
+    setClientModalOpen(true)
+  }
+
   function addOrderPage() {
+    const clientName = clientDraftName.trim()
+    const label = clientName || defaultClientLabel()
     const order = {
       id: `client-${Date.now()}`,
-      label: `Client ${orders.length + 1}`,
+      label,
+      clientName,
       cart: [],
       itemDiscounts: {},
     }
     setOrders(prev => [...prev, order])
     setActiveOrderId(order.id)
     setCheckoutOpen(false)
+    setClientModalOpen(false)
+    setClientDraftName('')
+    setClientSuggestionsOpen(false)
+    if (clientName && onSaveClient) onSaveClient(clientName)
   }
 
   function removeOrderPage(orderId) {
     if (orders.length === 1) {
-      setActiveCart([])
-      setActiveDiscounts({})
+      setOrders([])
+      setActiveOrderId('')
       setCheckoutOpen(false)
       return
     }
@@ -111,6 +160,11 @@ export default function POS({ products, sales, onCompleteSale, onEditProduct, on
   }
 
   function addToCart(product) {
+    if (!activeOrder) {
+      setClientModalOpen(true)
+      return
+    }
+
     const price = Number(product.price) || 0
     if (price <= 0) {
       alert('Add a sale price to this product before selling it.')
@@ -119,11 +173,13 @@ export default function POS({ products, sales, onCompleteSale, onEditProduct, on
 
     setActiveCart(prev => {
       const existing = prev.find(item => item.productId === product.id)
+      const stockAvailable = tracksStock(product) ? (Number(product.qty) || 0) : getServiceCapacity(product)
       if (existing) {
-        if (tracksStock(product) && existing.qty >= Number(product.qty)) return prev
+        if (Number.isFinite(stockAvailable) && existing.qty >= stockAvailable) return prev
         return prev.map(item => item.productId === product.id ? { ...item, qty: item.qty + 1 } : item)
       }
 
+      const consumedProduct = productsById[product.consumesProductId]
       return [
         ...prev,
         {
@@ -132,9 +188,13 @@ export default function POS({ products, sales, onCompleteSale, onEditProduct, on
           category: product.cat,
           unit: product.unit,
           trackStock: product.trackStock !== false,
+          consumesProductId: product.consumesProductId || '',
+          consumedProductName: consumedProduct?.name || '',
+          consumedProductUnit: consumedProduct?.unit || '',
+          consumptionPerSale: Number(product.consumptionPerSale) || 0,
           price,
           qty: 1,
-          stockAvailable: product.trackStock === false ? Infinity : (Number(product.qty) || 0),
+          stockAvailable,
         },
       ]
     })
@@ -155,7 +215,7 @@ export default function POS({ products, sales, onCompleteSale, onEditProduct, on
   }
 
   function clearCart() {
-    if (cart.length === 0) return
+    if (!activeOrder || cart.length === 0) return
     if (confirm('Clear the current cart?')) {
       setActiveCart([])
       setActiveDiscounts({})
@@ -164,6 +224,11 @@ export default function POS({ products, sales, onCompleteSale, onEditProduct, on
   }
 
   function openCheckout() {
+    if (!activeOrder) {
+      setClientModalOpen(true)
+      return
+    }
+
     if (cart.length === 0) {
       alert('Add at least one product to the cart.')
       return
@@ -192,6 +257,10 @@ export default function POS({ products, sales, onCompleteSale, onEditProduct, on
           unit: item.unit,
           price: item.price,
           qty: item.qty,
+          consumesProductId: item.consumesProductId,
+          consumedProductName: item.consumedProductName,
+          consumedProductUnit: item.consumedProductUnit,
+          consumptionPerSale: item.consumptionPerSale,
           discount,
           lineSubtotal,
           lineTotal: Math.max(0, lineSubtotal - discount),
@@ -199,6 +268,7 @@ export default function POS({ products, sales, onCompleteSale, onEditProduct, on
       }),
       paymentMethod,
       discount: discountTotal,
+      clientName: activeOrder?.clientName?.trim() || '',
     })
     setActiveCart([])
     setActiveDiscounts({})
@@ -208,6 +278,11 @@ export default function POS({ products, sales, onCompleteSale, onEditProduct, on
 
   function handleProductTile(product) {
     if (tracksStock(product) && Number(product.qty) <= 0) {
+      if (onEditProduct) onEditProduct(product)
+      return
+    }
+
+    if (!tracksStock(product) && getServiceCapacity(product) <= 0) {
       if (onEditProduct) onEditProduct(product)
       return
     }
@@ -358,12 +433,19 @@ export default function POS({ products, sales, onCompleteSale, onEditProduct, on
             {filteredProducts.map(product => {
               const hasPrice = Number(product.price) > 0
               const isService = !tracksStock(product)
-              const outOfStock = tracksStock(product) && Number(product.qty) <= 0
+              const serviceCapacity = isService ? getServiceCapacity(product) : Infinity
+              const serviceStockLabel = isService ? getStockSourceLabel(product) : ''
+              const outOfStock = tracksStock(product) ? Number(product.qty) <= 0 : serviceCapacity <= 0
               const lowStock = tracksStock(product) && Number(product.qty) <= Number(product.reorder)
+              const isOverstocked = tracksStock(product)
+                && Number(product.reorder) > 0
+                && Number(product.qty) >= Number(product.reorder) * OVERSTOCK_REORDER_MULTIPLE
+                && getUsageInLastDays(product) <= LOW_USAGE_WEEKLY_THRESHOLD
               const tileClass = [
                 'product-tile',
                 !hasPrice ? 'missing-price' : '',
                 outOfStock ? 'out-of-stock' : '',
+                isOverstocked ? 'overstocked' : '',
               ].filter(Boolean).join(' ')
               return (
                 <div
@@ -377,11 +459,13 @@ export default function POS({ products, sales, onCompleteSale, onEditProduct, on
                   <span className="tile-category">{product.cat}</span>
                   <strong>{product.name}</strong>
                   <span className="tile-meta">
-                    <span>{isService ? 'Service' : withUnit(product.qty, product.unit)}</span>
+                    <span>{isService ? (serviceStockLabel || 'Service') : withUnit(product.qty, product.unit)}</span>
                     {isService
-                      ? <span className="service-pill">Service</span>
+                      ? <span className="service-pill">{Number.isFinite(serviceCapacity) ? `${serviceCapacity} left` : 'Service'}</span>
                       : outOfStock
                       ? <span className="out-stock-pill">Out</span>
+                      : isOverstocked
+                      ? <span className="overstock-pill">Overstock</span>
                       : lowStock && <span className="low-stock-pill">Low</span>}
                   </span>
                   <span className="tile-price">{hasPrice ? money(product.price) : 'Set price'}</span>
@@ -420,15 +504,22 @@ export default function POS({ products, sales, onCompleteSale, onEditProduct, on
           <div>
             <span className="eyebrow">Pending order</span>
             <h3>Order summary</h3>
-            <p>{itemCount} {itemCount === 1 ? 'item selected' : 'items selected'}</p>
+            <p>{activeOrder ? `${itemCount} ${itemCount === 1 ? 'item selected' : 'items selected'}` : 'Add client to begin order'}</p>
           </div>
           <button onClick={clearCart} disabled={cart.length === 0} className="clear-cart-button">
             Clear
           </button>
         </div>
 
+        <div className="client-name-display">
+          <span>Client</span>
+          <strong>{activeOrder ? (activeOrder.clientName || activeOrder.label) : 'No client selected'}</strong>
+        </div>
+
         <div className="cart-list">
-          {cart.length === 0 ? (
+          {!activeOrder ? (
+            <div className="cart-empty">Tap Add client to start an order.</div>
+          ) : cart.length === 0 ? (
             <div className="cart-empty">Tap products to build the order list.</div>
           ) : cart.map(item => (
             <div key={item.productId} className="cart-row">
@@ -468,6 +559,7 @@ export default function POS({ products, sales, onCompleteSale, onEditProduct, on
           const orderCount = order.cart.reduce((sum, item) => sum + item.qty, 0)
           const orderTotal = order.cart.reduce((sum, item) => sum + item.qty * item.price, 0)
           const isActive = order.id === activeOrderId
+          const tabLabel = order.clientName?.trim() || order.label
           return (
             <div
               key={order.id}
@@ -484,7 +576,7 @@ export default function POS({ products, sales, onCompleteSale, onEditProduct, on
               className={isActive ? 'order-page-tab active' : 'order-page-tab'}
             >
               <span>
-                <strong>{order.label}</strong>
+                <strong>{tabLabel}</strong>
                 <small>{orderCount} items | {money(orderTotal)}</small>
               </span>
               <span
@@ -508,8 +600,77 @@ export default function POS({ products, sales, onCompleteSale, onEditProduct, on
             </div>
           )
         })}
-        <button type="button" onClick={addOrderPage} className="add-order-tab">New client</button>
+        <button type="button" onClick={openClientModal} className="add-order-tab">
+          <span className="add-order-plus" aria-hidden="true">+</span>
+          <span>Add client</span>
+        </button>
       </div>
+
+      {clientModalOpen && (
+        <div className="client-modal-backdrop">
+          <div className="client-modal" role="dialog" aria-modal="true" aria-labelledby="client-modal-title">
+            <div>
+              <span className="eyebrow">New order</span>
+              <h3 id="client-modal-title">Add client</h3>
+              <p>Client name is optional. Leave it blank to use the current date and time.</p>
+            </div>
+
+            <div className="client-combobox">
+              <label className="client-name-field">
+                <span>Client name <small>(optional)</small></span>
+                <input
+                  value={clientDraftName}
+                  onFocus={() => setClientSuggestionsOpen(true)}
+                  onClick={() => setClientSuggestionsOpen(true)}
+                  onBlur={() => setTimeout(() => setClientSuggestionsOpen(false), 120)}
+                  onChange={event => {
+                    setClientDraftName(event.target.value)
+                    setClientSuggestionsOpen(true)
+                  }}
+                  onKeyDown={event => {
+                    if (event.key === 'Enter') addOrderPage()
+                    if (event.key === 'Escape') {
+                      setClientSuggestionsOpen(false)
+                      setClientModalOpen(false)
+                    }
+                  }}
+                  placeholder="Search or type client name"
+                  autoComplete="off"
+                  autoFocus
+                />
+              </label>
+
+            {clientSuggestionsOpen && clientSuggestions.length > 0 && (
+              <div className="client-suggestion-list" aria-label="Saved clients">
+                {clientSuggestions.map(client => (
+                  <button
+                    key={client.id || client.name}
+                    type="button"
+                    onMouseDown={event => event.preventDefault()}
+                    onClick={() => {
+                      setClientDraftName(client.name)
+                      setClientSuggestionsOpen(false)
+                    }}
+                  >
+                    <span className="client-suggestion-mark">{client.name.slice(0, 1).toUpperCase()}</span>
+                    <span>{client.name}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            </div>
+
+            <div className="client-modal-actions">
+              <button type="button" onClick={() => setClientModalOpen(false)} className="secondary-page-button">
+                Cancel
+              </button>
+              <button type="button" onClick={addOrderPage} className="complete-sale-button">
+                Start order
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

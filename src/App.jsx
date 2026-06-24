@@ -25,6 +25,10 @@ export default function App() {
     const saved = localStorage.getItem('vet-sales')
     return saved ? JSON.parse(saved) : []
   })
+  const [clients, setClients] = useState(() => {
+    const saved = localStorage.getItem('vet-clients')
+    return saved ? JSON.parse(saved) : []
+  })
   const [tab, setTab] = useState('pos')
   const [modalOpen, setModalOpen] = useState(false)
   const [editProduct, setEditProduct] = useState(null)
@@ -40,6 +44,10 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('vet-sales', JSON.stringify(sales))
   }, [sales])
+
+  useEffect(() => {
+    localStorage.setItem('vet-clients', JSON.stringify(clients))
+  }, [clients])
 
   function saveProduct(data) {
     if (data.id) {
@@ -62,7 +70,44 @@ export default function App() {
     setUndoProduct(null)
   }
 
-  function completeSale({ items, paymentMethod, discount }) {
+  function applyTrendReorderLevels(updates) {
+    setProducts(prev => prev.map(product => {
+      const update = updates.find(item => item.id === product.id)
+      if (!update) return product
+      return {
+        ...product,
+        reorder: update.reorder,
+        reorderAutomatedAt: new Date().toISOString(),
+      }
+    }))
+  }
+
+  function saveClientName(name) {
+    const cleanName = name.trim()
+    if (!cleanName) return
+
+    setClients(prev => {
+      const existing = prev.find(client => client.name.toLowerCase() === cleanName.toLowerCase())
+      if (existing) {
+        return prev.map(client => client.id === existing.id
+          ? { ...client, name: cleanName, lastUsedAt: new Date().toISOString() }
+          : client
+        )
+      }
+
+      return [
+        {
+          id: Date.now(),
+          name: cleanName,
+          createdAt: new Date().toISOString(),
+          lastUsedAt: new Date().toISOString(),
+        },
+        ...prev,
+      ]
+    })
+  }
+
+  function completeSale({ items, paymentMethod, discount, clientName }) {
     const subtotal = items.reduce((sum, item) => {
       return sum + (Number(item.lineSubtotal) || Number(item.qty) * Number(item.price))
     }, 0)
@@ -76,19 +121,27 @@ export default function App() {
       id: Date.now(),
       date: new Date().toISOString(),
       items,
+      clientName: clientName?.trim() || '',
       paymentMethod,
       discount: normalizedDiscount,
       subtotal,
       total,
     }
+    if (sale.clientName) saveClientName(sale.clientName)
     const soldById = items.reduce((map, item) => {
       map[item.productId] = (map[item.productId] || 0) + item.qty
+      return map
+    }, {})
+    const consumedById = items.reduce((map, item) => {
+      if (!item.consumesProductId || !Number(item.consumptionPerSale)) return map
+      map[item.consumesProductId] = (map[item.consumesProductId] || 0) + (Number(item.qty) || 0) * Number(item.consumptionPerSale)
       return map
     }, {})
 
     setProducts(prev => prev.map(product => {
       const soldQty = soldById[product.id] || 0
-      if (!soldQty) return product
+      const consumedQty = consumedById[product.id] || 0
+      if (!soldQty && !consumedQty) return product
 
       if (product.trackStock === false) {
         return {
@@ -98,14 +151,15 @@ export default function App() {
       }
 
       const qtyBefore = Number(product.qty) || 0
-      const qtyAfter = Math.max(0, qtyBefore - soldQty)
+      const usedQty = soldQty + consumedQty
+      const qtyAfter = Math.max(0, qtyBefore - usedQty)
       const saleSnapshot = {
         date: sale.date,
         type: 'sale',
         saleId: sale.id,
         qtyBefore,
         qtyAfter,
-        usedWeek: soldQty,
+        usedWeek: usedQty,
         soldBefore: Number(product.sold) || 0,
         lastQtyBefore: product.lastQty,
       }
@@ -114,7 +168,7 @@ export default function App() {
         ...product,
         qty: qtyAfter,
         lastQty: qtyBefore,
-        sold: (Number(product.sold) || 0) + soldQty,
+        sold: (Number(product.sold) || 0) + usedQty,
         countHistory: [...(product.countHistory || []), saleSnapshot].slice(-20),
       }
     }))
@@ -153,7 +207,7 @@ export default function App() {
   }
 
   function exportBackup() {
-    const data = JSON.stringify({ products, sales }, null, 2)
+    const data = JSON.stringify({ products, sales, clients }, null, 2)
     const blob = new Blob([data], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
@@ -177,7 +231,8 @@ export default function App() {
         } else if (Array.isArray(imported.products)) {
           setProducts(imported.products)
           setSales(Array.isArray(imported.sales) ? imported.sales : [])
-          alert(`Successfully imported ${imported.products.length} products and ${Array.isArray(imported.sales) ? imported.sales.length : 0} sales!`)
+          setClients(Array.isArray(imported.clients) ? imported.clients : [])
+          alert(`Successfully imported ${imported.products.length} products, ${Array.isArray(imported.sales) ? imported.sales.length : 0} sales, and ${Array.isArray(imported.clients) ? imported.clients.length : 0} clients!`)
         } else {
           alert('Invalid file. Please use a valid backup JSON file.')
         }
@@ -273,12 +328,14 @@ export default function App() {
           <POS
             products={products}
             sales={sales}
+            clients={clients}
             onCompleteSale={completeSale}
+            onSaveClient={saveClientName}
             onEditProduct={openEdit}
             onRestockProduct={product => setRestockProduct(product)}
           />
         )}
-        {tab === 'analytics' && <Analytics products={products} />}
+        {tab === 'analytics' && <Analytics products={products} onApplyReorderLevels={applyTrendReorderLevels} />}
         {tab === 'report' && <Report products={products} />}
       </main>
 
