@@ -5,14 +5,18 @@ const money = value => `PHP ${Number(value || 0).toFixed(2)}`
 const withUnit = (value, unit) => unit ? `${value} ${unit}` : String(value)
 const priceLabel = item => item.unit ? `${money(item.price)} / ${item.unit}` : money(item.price)
 const tracksStock = product => product.trackStock !== false
+const initialOrder = { id: 'client-1', label: 'Client 1', cart: [], itemDiscounts: {} }
 
 export default function POS({ products, sales, onCompleteSale, onEditProduct, onRestockProduct }) {
   const [search, setSearch] = useState('')
   const [activeCategory, setActiveCategory] = useState('All')
-  const [cart, setCart] = useState([])
+  const [orders, setOrders] = useState([initialOrder])
+  const [activeOrderId, setActiveOrderId] = useState(initialOrder.id)
   const [checkoutOpen, setCheckoutOpen] = useState(false)
   const [paymentMethod, setPaymentMethod] = useState('Cash')
-  const [itemDiscounts, setItemDiscounts] = useState({})
+  const activeOrder = orders.find(order => order.id === activeOrderId) || orders[0]
+  const cart = activeOrder?.cart || []
+  const itemDiscounts = activeOrder?.itemDiscounts || {}
 
   const categories = useMemo(() => {
     const unique = [...new Set(products.map(product => product.cat).filter(Boolean))].sort()
@@ -59,6 +63,53 @@ export default function POS({ products, sales, onCompleteSale, onEditProduct, on
   const todaySales = sales.filter(sale => sale.date?.slice(0, 10) === todayKey)
   const todayRevenue = todaySales.reduce((sum, sale) => sum + (Number(sale.total) || 0), 0)
 
+  function updateActiveOrder(updater) {
+    setOrders(prev => prev.map(order => {
+      if (order.id !== activeOrderId) return order
+      return { ...order, ...updater(order) }
+    }))
+  }
+
+  function setActiveCart(updater) {
+    updateActiveOrder(order => ({
+      cart: typeof updater === 'function' ? updater(order.cart) : updater,
+    }))
+  }
+
+  function setActiveDiscounts(updater) {
+    updateActiveOrder(order => ({
+      itemDiscounts: typeof updater === 'function' ? updater(order.itemDiscounts) : updater,
+    }))
+  }
+
+  function addOrderPage() {
+    const order = {
+      id: `client-${Date.now()}`,
+      label: `Client ${orders.length + 1}`,
+      cart: [],
+      itemDiscounts: {},
+    }
+    setOrders(prev => [...prev, order])
+    setActiveOrderId(order.id)
+    setCheckoutOpen(false)
+  }
+
+  function removeOrderPage(orderId) {
+    if (orders.length === 1) {
+      setActiveCart([])
+      setActiveDiscounts({})
+      setCheckoutOpen(false)
+      return
+    }
+
+    const remaining = orders.filter(order => order.id !== orderId)
+    setOrders(remaining)
+    if (activeOrderId === orderId) {
+      setActiveOrderId(remaining[0].id)
+      setCheckoutOpen(false)
+    }
+  }
+
   function addToCart(product) {
     const price = Number(product.price) || 0
     if (price <= 0) {
@@ -66,7 +117,7 @@ export default function POS({ products, sales, onCompleteSale, onEditProduct, on
       return
     }
 
-    setCart(prev => {
+    setActiveCart(prev => {
       const existing = prev.find(item => item.productId === product.id)
       if (existing) {
         if (tracksStock(product) && existing.qty >= Number(product.qty)) return prev
@@ -90,7 +141,7 @@ export default function POS({ products, sales, onCompleteSale, onEditProduct, on
   }
 
   function updateQty(productId, nextQty) {
-    setCart(prev => prev.flatMap(item => {
+    setActiveCart(prev => prev.flatMap(item => {
       if (item.productId !== productId) return [item]
       const qty = Math.max(0, Math.min(Number(nextQty) || 0, item.stockAvailable))
       return qty === 0 ? [] : [{ ...item, qty }]
@@ -106,8 +157,8 @@ export default function POS({ products, sales, onCompleteSale, onEditProduct, on
   function clearCart() {
     if (cart.length === 0) return
     if (confirm('Clear the current cart?')) {
-      setCart([])
-      setItemDiscounts({})
+      setActiveCart([])
+      setActiveDiscounts({})
       setCheckoutOpen(false)
     }
   }
@@ -121,7 +172,7 @@ export default function POS({ products, sales, onCompleteSale, onEditProduct, on
   }
 
   function setItemDiscount(productId, value) {
-    setItemDiscounts(prev => ({ ...prev, [productId]: value }))
+    setActiveDiscounts(prev => ({ ...prev, [productId]: value }))
   }
 
   function checkoutOrder() {
@@ -149,8 +200,8 @@ export default function POS({ products, sales, onCompleteSale, onEditProduct, on
       paymentMethod,
       discount: discountTotal,
     })
-    setCart([])
-    setItemDiscounts({})
+    setActiveCart([])
+    setActiveDiscounts({})
     setCheckoutOpen(false)
     setPaymentMethod('Cash')
   }
@@ -186,7 +237,7 @@ export default function POS({ products, sales, onCompleteSale, onEditProduct, on
               <h3>Checkout</h3>
               <p>Review the order, apply item discounts, then choose the buyer payment mode.</p>
             </div>
-            <button onClick={() => setCheckoutOpen(false)} className="secondary-page-button">Back to POS</button>
+            <button onClick={() => setCheckoutOpen(false)} className="secondary-page-button danger-page-button">Back to POS</button>
           </div>
 
           <div className="checkout-item-list">
@@ -411,6 +462,54 @@ export default function POS({ products, sales, onCompleteSale, onEditProduct, on
           Checkout
         </button>
       </aside>
+
+      <div className="order-page-strip" aria-label="Client order pages">
+        {orders.map(order => {
+          const orderCount = order.cart.reduce((sum, item) => sum + item.qty, 0)
+          const orderTotal = order.cart.reduce((sum, item) => sum + item.qty * item.price, 0)
+          const isActive = order.id === activeOrderId
+          return (
+            <div
+              key={order.id}
+              role="button"
+              tabIndex={0}
+              onClick={() => { setActiveOrderId(order.id); setCheckoutOpen(false) }}
+              onKeyDown={event => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  setActiveOrderId(order.id)
+                  setCheckoutOpen(false)
+                }
+              }}
+              className={isActive ? 'order-page-tab active' : 'order-page-tab'}
+            >
+              <span>
+                <strong>{order.label}</strong>
+                <small>{orderCount} items | {money(orderTotal)}</small>
+              </span>
+              <span
+                role="button"
+                tabIndex={0}
+                className="order-close"
+                onClick={event => {
+                  event.stopPropagation()
+                  removeOrderPage(order.id)
+                }}
+                onKeyDown={event => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    removeOrderPage(order.id)
+                  }
+                }}
+              >
+                x
+              </span>
+            </div>
+          )
+        })}
+        <button type="button" onClick={addOrderPage} className="add-order-tab">New client</button>
+      </div>
     </div>
   )
 }

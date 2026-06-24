@@ -3,7 +3,7 @@ import { getUsageInLastDaysWithPendingCount } from '../utils/usage'
 
 const DEFAULT_CATS = ['Medicine', 'Vaccine', 'Test Kits', 'Supplies', 'Food', 'Equipment', 'Service']
 
-export default function ProductModal({ product, products = [], onSave, onClose }) {
+export default function ProductModal({ product, preset = null, products = [], onSave, onClose }) {
   const isEdit = !!product
   const savedCats = products.map(item => item.cat).filter(Boolean)
   const cats = [...new Set([...DEFAULT_CATS, ...savedCats])].sort()
@@ -12,7 +12,7 @@ export default function ProductModal({ product, products = [], onSave, onClose }
   const [form, setForm] = useState(
     isEdit
       ? { trackStock: product.trackStock !== false, ...product, newQty: product.qty }
-      : { name: '', cat: initialCat, customCat: '', qty: '', unit: '', reorder: '', price: '', newQty: '', trackStock: true }
+      : { name: '', cat: initialCat, customCat: '', qty: '', unit: '', reorder: '', price: '', newQty: '', trackStock: true, ...preset }
   )
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))

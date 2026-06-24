@@ -28,8 +28,10 @@ export default function App() {
   const [tab, setTab] = useState('pos')
   const [modalOpen, setModalOpen] = useState(false)
   const [editProduct, setEditProduct] = useState(null)
+  const [productPreset, setProductPreset] = useState(null)
   const [restockProduct, setRestockProduct] = useState(null)
   const [undoProduct, setUndoProduct] = useState(null)
+  const [navCollapsed, setNavCollapsed] = useState(false)
 
   useEffect(() => {
     localStorage.setItem('vet-products', JSON.stringify(products))
@@ -47,6 +49,7 @@ export default function App() {
     }
     setModalOpen(false)
     setEditProduct(null)
+    setProductPreset(null)
   }
 
   function saveRestock(data) {
@@ -125,11 +128,26 @@ export default function App() {
   }
 
   function openEdit(product) {
+    setProductPreset(null)
     setEditProduct(product)
     setModalOpen(true)
   }
 
   function openNewProduct() {
+    setProductPreset(null)
+    setEditProduct(null)
+    setModalOpen(true)
+  }
+
+  function openNewService() {
+    setProductPreset({
+      cat: 'Service',
+      trackStock: false,
+      qty: '',
+      newQty: '',
+      unit: '',
+      reorder: '',
+    })
     setEditProduct(null)
     setModalOpen(true)
   }
@@ -174,7 +192,7 @@ export default function App() {
   const activeTab = tabs.find(item => item.id === tab)
 
   return (
-    <div className="app-shell">
+    <div className={navCollapsed ? 'app-shell nav-collapsed' : 'app-shell'}>
       <aside className="side-nav">
         <div className="brand-block">
           <div className="brand-mark">VP</div>
@@ -182,6 +200,14 @@ export default function App() {
             <h1>Vet POS</h1>
             <p>{new Date().toLocaleDateString('en-PH', { weekday: 'long', month: 'short', day: 'numeric' })}</p>
           </div>
+          <button
+            type="button"
+            onClick={() => setNavCollapsed(prev => !prev)}
+            className="sidebar-toggle"
+            aria-label={navCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            <span>{navCollapsed ? '›' : '‹'}</span>
+          </button>
         </div>
 
         <nav className="nav-stack" aria-label="Primary">
@@ -198,7 +224,14 @@ export default function App() {
         </nav>
 
         <div className="nav-actions">
-          <button onClick={openNewProduct} className="primary-action">Add product</button>
+          <div className="create-actions">
+            <button onClick={openNewProduct} className="primary-action">
+              Add product
+            </button>
+            <button onClick={openNewService} className="service-action">
+              Add service
+            </button>
+          </div>
           <div className="backup-actions">
             <button onClick={exportBackup} className="secondary-action">Export</button>
             <label className="secondary-action">
@@ -215,7 +248,14 @@ export default function App() {
             <div className="eyebrow">Counter mode</div>
             <h2>{activeTab?.label}</h2>
           </div>
-          <button onClick={openNewProduct} className="header-add-button">Add product</button>
+          <div className="header-actions">
+            <button onClick={openNewProduct} className="header-add-button">
+              Add product
+            </button>
+            <button onClick={openNewService} className="header-service-button">
+              Add service
+            </button>
+          </div>
         </header>
 
         {tab !== 'pos' && <Dashboard products={products} />}
@@ -245,9 +285,10 @@ export default function App() {
       {modalOpen && (
         <ProductModal
           product={editProduct}
+          preset={productPreset}
           products={products}
           onSave={saveProduct}
-          onClose={() => { setModalOpen(false); setEditProduct(null) }}
+          onClose={() => { setModalOpen(false); setEditProduct(null); setProductPreset(null) }}
         />
       )}
 
