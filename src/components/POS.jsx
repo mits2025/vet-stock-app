@@ -8,6 +8,11 @@ const tracksStock = product => product.trackStock !== false
 const consumesStock = product => product.trackStock === false && product.consumesProductId && Number(product.consumptionPerSale) > 0
 const OVERSTOCK_REORDER_MULTIPLE = 3
 const LOW_USAGE_WEEKLY_THRESHOLD = 1
+const PAYMENT_OPTIONS = ['Cash', 'GCash', 'Bank transfer', 'Card']
+const discountAmount = (lineSubtotal, value) => {
+  const percent = Math.min(100, Math.max(0, Number(value) || 0))
+  return lineSubtotal * (percent / 100)
+}
 const defaultClientLabel = () => `Client ${new Date().toLocaleString('en-PH', {
   month: 'short',
   day: 'numeric',
@@ -15,11 +20,21 @@ const defaultClientLabel = () => `Client ${new Date().toLocaleString('en-PH', {
   minute: '2-digit',
 })}`
 
-export default function POS({ products, sales, clients = [], onCompleteSale, onEditProduct, onRestockProduct, onSaveClient }) {
+export default function POS({
+  products,
+  sales,
+  clients = [],
+  orders,
+  activeOrderId,
+  setOrders,
+  setActiveOrderId,
+  onCompleteSale,
+  onEditProduct,
+  onRestockProduct,
+  onSaveClient,
+}) {
   const [search, setSearch] = useState('')
   const [activeCategory, setActiveCategory] = useState('All')
-  const [orders, setOrders] = useState([])
-  const [activeOrderId, setActiveOrderId] = useState('')
   const [checkoutOpen, setCheckoutOpen] = useState(false)
   const [paymentMethod, setPaymentMethod] = useState('Cash')
   const [clientModalOpen, setClientModalOpen] = useState(false)
@@ -90,13 +105,12 @@ export default function POS({ products, sales, clients = [], onCompleteSale, onE
   const subtotal = cart.reduce((sum, item) => sum + item.qty * item.price, 0)
   const discountTotal = cart.reduce((sum, item) => {
     const lineSubtotal = item.qty * item.price
-    const discount = Math.min(lineSubtotal, Math.max(0, Number(itemDiscounts[item.productId]) || 0))
-    return sum + discount
+    return sum + discountAmount(lineSubtotal, itemDiscounts[item.productId])
   }, 0)
   const total = Math.max(0, subtotal - discountTotal)
   const itemCount = cart.reduce((sum, item) => sum + item.qty, 0)
   const todayKey = new Date().toISOString().slice(0, 10)
-  const todaySales = sales.filter(sale => sale.date?.slice(0, 10) === todayKey)
+  const todaySales = sales.filter(sale => !sale.voided && sale.date?.slice(0, 10) === todayKey)
   const todayRevenue = todaySales.reduce((sum, sale) => sum + (Number(sale.total) || 0), 0)
 
   function updateActiveOrder(updater) {
@@ -250,7 +264,8 @@ export default function POS({ products, sales, clients = [], onCompleteSale, onE
     onCompleteSale({
       items: cart.map(item => {
         const lineSubtotal = item.qty * item.price
-        const discount = Math.min(lineSubtotal, Math.max(0, Number(itemDiscounts[item.productId]) || 0))
+        const discountPercent = Math.min(100, Math.max(0, Number(itemDiscounts[item.productId]) || 0))
+        const discount = discountAmount(lineSubtotal, discountPercent)
         return {
           productId: item.productId,
           name: item.name,
@@ -262,6 +277,7 @@ export default function POS({ products, sales, clients = [], onCompleteSale, onE
           consumedProductUnit: item.consumedProductUnit,
           consumptionPerSale: item.consumptionPerSale,
           discount,
+          discountPercent,
           lineSubtotal,
           lineTotal: Math.max(0, lineSubtotal - discount),
         }
@@ -270,8 +286,7 @@ export default function POS({ products, sales, clients = [], onCompleteSale, onE
       discount: discountTotal,
       clientName: activeOrder?.clientName?.trim() || '',
     })
-    setActiveCart([])
-    setActiveDiscounts({})
+    if (activeOrder) removeOrderPage(activeOrder.id)
     setCheckoutOpen(false)
     setPaymentMethod('Cash')
   }
@@ -318,7 +333,8 @@ export default function POS({ products, sales, clients = [], onCompleteSale, onE
           <div className="checkout-item-list">
             {cart.map(item => {
               const lineSubtotal = item.qty * item.price
-              const discount = Math.min(lineSubtotal, Math.max(0, Number(itemDiscounts[item.productId]) || 0))
+              const discountPercent = Math.min(100, Math.max(0, Number(itemDiscounts[item.productId]) || 0))
+              const discount = discountAmount(lineSubtotal, discountPercent)
               const lineTotal = Math.max(0, lineSubtotal - discount)
               return (
                 <div key={item.productId} className="checkout-item-row">
@@ -327,19 +343,19 @@ export default function POS({ products, sales, clients = [], onCompleteSale, onE
                     <span>{item.qty} x {priceLabel(item)}</span>
                   </div>
                   <label>
-                    Discount
+                    Discount %
                     <input
                       type="number"
                       min="0"
-                      max={lineSubtotal}
-                      step="0.01"
+                      max="100"
+                      step="1"
                       value={itemDiscounts[item.productId] ?? ''}
                       onChange={event => setItemDiscount(item.productId, event.target.value)}
-                      placeholder="0.00"
+                      placeholder="0"
                     />
                   </label>
                   <div className="checkout-line-total">
-                    <span>{discount > 0 ? `${money(lineSubtotal)} - ${money(discount)}` : money(lineSubtotal)}</span>
+                    <span>{discount > 0 ? `${money(lineSubtotal)} - ${discountPercent}% (${money(discount)})` : money(lineSubtotal)}</span>
                     <strong>{money(lineTotal)}</strong>
                   </div>
                 </div>
@@ -354,16 +370,22 @@ export default function POS({ products, sales, clients = [], onCompleteSale, onE
             <h3>Total due</h3>
           </div>
 
-          <div className="checkout-controls">
-            <label>
-              Payment mode
-              <select value={paymentMethod} onChange={event => setPaymentMethod(event.target.value)}>
-                <option>Cash</option>
-                <option>GCash</option>
-                <option>Card</option>
-                <option>Bank transfer</option>
-              </select>
-            </label>
+          <div className="payment-mode-buttons" aria-label="Payment mode">
+            {PAYMENT_OPTIONS.map(option => (
+              <button
+                key={option}
+                type="button"
+                onClick={() => setPaymentMethod(option)}
+                className={[
+                  'payment-mode-button',
+                  `payment-${option.toLowerCase().replace(/\s+/g, '-')}`,
+                  paymentMethod === option ? 'active' : '',
+                ].filter(Boolean).join(' ')}
+                aria-pressed={paymentMethod === option}
+              >
+                {option}
+              </button>
+            ))}
           </div>
 
           <div className="totals-panel">
@@ -381,8 +403,61 @@ export default function POS({ products, sales, clients = [], onCompleteSale, onE
   }
 
   return (
-    <div className="pos-screen">
-      <section className="pos-products-panel">
+    <>
+      <div className="order-page-strip" aria-label="Client order pages">
+        {orders.map(order => {
+          const orderCount = order.cart.reduce((sum, item) => sum + item.qty, 0)
+          const orderTotal = order.cart.reduce((sum, item) => sum + item.qty * item.price, 0)
+          const isActive = order.id === activeOrderId
+          const tabLabel = order.clientName?.trim() || order.label
+          return (
+            <div
+              key={order.id}
+              role="button"
+              tabIndex={0}
+              onClick={() => { setActiveOrderId(order.id); setCheckoutOpen(false) }}
+              onKeyDown={event => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  setActiveOrderId(order.id)
+                  setCheckoutOpen(false)
+                }
+              }}
+              className={isActive ? 'order-page-tab active' : 'order-page-tab'}
+            >
+              <span>
+                <strong>{tabLabel}</strong>
+                <small>{orderCount} items | {money(orderTotal)}</small>
+              </span>
+              <span
+                role="button"
+                tabIndex={0}
+                className="order-close"
+                onClick={event => {
+                  event.stopPropagation()
+                  removeOrderPage(order.id)
+                }}
+                onKeyDown={event => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    removeOrderPage(order.id)
+                  }
+                }}
+              >
+                x
+              </span>
+            </div>
+          )
+        })}
+        <button type="button" onClick={openClientModal} className="add-order-tab">
+          <span className="add-order-plus" aria-hidden="true">+</span>
+          <span>Add client</span>
+        </button>
+      </div>
+
+      <div className="pos-screen">
+        <section className="pos-products-panel">
         <div className="pos-toolbar">
           <div className="pos-search-wrap">
             <label htmlFor="pos-search">Product search</label>
@@ -554,56 +629,6 @@ export default function POS({ products, sales, clients = [], onCompleteSale, onE
         </button>
       </aside>
 
-      <div className="order-page-strip" aria-label="Client order pages">
-        {orders.map(order => {
-          const orderCount = order.cart.reduce((sum, item) => sum + item.qty, 0)
-          const orderTotal = order.cart.reduce((sum, item) => sum + item.qty * item.price, 0)
-          const isActive = order.id === activeOrderId
-          const tabLabel = order.clientName?.trim() || order.label
-          return (
-            <div
-              key={order.id}
-              role="button"
-              tabIndex={0}
-              onClick={() => { setActiveOrderId(order.id); setCheckoutOpen(false) }}
-              onKeyDown={event => {
-                if (event.key === 'Enter' || event.key === ' ') {
-                  event.preventDefault()
-                  setActiveOrderId(order.id)
-                  setCheckoutOpen(false)
-                }
-              }}
-              className={isActive ? 'order-page-tab active' : 'order-page-tab'}
-            >
-              <span>
-                <strong>{tabLabel}</strong>
-                <small>{orderCount} items | {money(orderTotal)}</small>
-              </span>
-              <span
-                role="button"
-                tabIndex={0}
-                className="order-close"
-                onClick={event => {
-                  event.stopPropagation()
-                  removeOrderPage(order.id)
-                }}
-                onKeyDown={event => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault()
-                    event.stopPropagation()
-                    removeOrderPage(order.id)
-                  }
-                }}
-              >
-                x
-              </span>
-            </div>
-          )
-        })}
-        <button type="button" onClick={openClientModal} className="add-order-tab">
-          <span className="add-order-plus" aria-hidden="true">+</span>
-          <span>Add client</span>
-        </button>
       </div>
 
       {clientModalOpen && (
@@ -671,6 +696,6 @@ export default function POS({ products, sales, clients = [], onCompleteSale, onE
           </div>
         </div>
       )}
-    </div>
+    </>
   )
 }

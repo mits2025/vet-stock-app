@@ -8,13 +8,22 @@ import UndoCountModal from './components/UndoCountModal'
 import Analytics from './components/Analytics'
 import Report from './components/Report'
 import POS from './components/POS'
+import SalesReport from './components/SalesReport'
 
 const tabs = [
   { id: 'pos', label: 'Checkout', short: 'POS' },
   { id: 'inventory', label: 'Inventory', short: 'Stock' },
   { id: 'analytics', label: 'Analytics', short: 'Stats' },
+  { id: 'sales-report', label: 'Sales Report', short: 'Sales' },
   { id: 'report', label: 'Reports', short: 'Report' },
 ]
+
+function todayKey() {
+  const date = new Date()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${date.getFullYear()}-${month}-${day}`
+}
 
 export default function App() {
   const [products, setProducts] = useState(() => {
@@ -29,6 +38,14 @@ export default function App() {
     const saved = localStorage.getItem('vet-clients')
     return saved ? JSON.parse(saved) : []
   })
+  const [expenses, setExpenses] = useState(() => {
+    const saved = localStorage.getItem('vet-expenses')
+    return saved ? JSON.parse(saved) : []
+  })
+  const [cashDrawer, setCashDrawer] = useState(() => {
+    const saved = localStorage.getItem('vet-cash-drawer')
+    return saved ? JSON.parse(saved) : {}
+  })
   const [tab, setTab] = useState('pos')
   const [modalOpen, setModalOpen] = useState(false)
   const [editProduct, setEditProduct] = useState(null)
@@ -36,6 +53,11 @@ export default function App() {
   const [restockProduct, setRestockProduct] = useState(null)
   const [undoProduct, setUndoProduct] = useState(null)
   const [navCollapsed, setNavCollapsed] = useState(false)
+  const [openingCashPrompt, setOpeningCashPrompt] = useState('')
+  const [orders, setOrders] = useState([])
+  const [activeOrderId, setActiveOrderId] = useState('')
+  const currentDayKey = todayKey()
+  const needsOpeningCash = tab === 'pos' && !cashDrawer[currentDayKey]
 
   useEffect(() => {
     localStorage.setItem('vet-products', JSON.stringify(products))
@@ -48,6 +70,14 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('vet-clients', JSON.stringify(clients))
   }, [clients])
+
+  useEffect(() => {
+    localStorage.setItem('vet-expenses', JSON.stringify(expenses))
+  }, [expenses])
+
+  useEffect(() => {
+    localStorage.setItem('vet-cash-drawer', JSON.stringify(cashDrawer))
+  }, [cashDrawer])
 
   function saveProduct(data) {
     if (data.id) {
@@ -175,6 +205,133 @@ export default function App() {
     setSales(prev => [sale, ...prev])
   }
 
+  function addExpense(expense) {
+    setExpenses(prev => [
+      {
+        id: Date.now(),
+        date: expense.date || new Date().toISOString().slice(0, 10),
+        category: expense.category?.trim() || 'General',
+        note: expense.note?.trim() || '',
+        paymentMethod: expense.paymentMethod || 'Cash',
+        amount: Math.max(0, Number(expense.amount) || 0),
+        createdAt: new Date().toISOString(),
+      },
+      ...prev,
+    ])
+  }
+
+  function deleteExpense(id) {
+    if (confirm('Remove this expense from the sales report?')) {
+      setExpenses(prev => prev.filter(expense => expense.id !== id))
+    }
+  }
+
+  function setOpeningCash(amount) {
+    const date = todayKey()
+    setCashDrawer(prev => ({
+      ...prev,
+      [date]: {
+        ...(prev[date] || {}),
+        openingCash: Math.max(0, Number(amount) || 0),
+        setAt: new Date().toISOString(),
+      },
+    }))
+  }
+
+  function setClosingCash(amount) {
+    const date = todayKey()
+    setCashDrawer(prev => ({
+      ...prev,
+      [date]: {
+        ...(prev[date] || {}),
+        closingCash: Math.max(0, Number(amount) || 0),
+        closedAt: new Date().toISOString(),
+      },
+    }))
+  }
+
+  function submitOpeningCashPrompt(event) {
+    event.preventDefault()
+    const trimmed = openingCashPrompt.trim()
+    if (trimmed === '') {
+      alert('Enter 0 if the money box is empty before starting POS.')
+      return
+    }
+    const amount = Number(trimmed)
+    if (!Number.isFinite(amount) || amount < 0) {
+      alert('Enter a valid opening cash amount.')
+      return
+    }
+    setOpeningCash(amount)
+    setOpeningCashPrompt('')
+  }
+
+  function voidSale(saleId, { reason, note }) {
+    const sale = sales.find(item => item.id === saleId)
+    if (!sale || sale.voided) return
+
+    const soldById = (sale.items || []).reduce((map, item) => {
+      map[item.productId] = (map[item.productId] || 0) + (Number(item.qty) || 0)
+      return map
+    }, {})
+    const consumedById = (sale.items || []).reduce((map, item) => {
+      if (!item.consumesProductId || !Number(item.consumptionPerSale)) return map
+      map[item.consumesProductId] = (map[item.consumesProductId] || 0) + (Number(item.qty) || 0) * Number(item.consumptionPerSale)
+      return map
+    }, {})
+
+    setProducts(prev => prev.map(product => {
+      const soldQty = soldById[product.id] || 0
+      const consumedQty = consumedById[product.id] || 0
+      if (!soldQty && !consumedQty) return product
+
+      if (product.trackStock === false) {
+        return {
+          ...product,
+          sold: Math.max(0, (Number(product.sold) || 0) - soldQty),
+        }
+      }
+
+      const restoredQty = soldQty + consumedQty
+      const qtyBefore = Number(product.qty) || 0
+      const qtyAfter = qtyBefore + restoredQty
+      const voidSnapshot = {
+        date: new Date().toISOString(),
+        type: 'void',
+        saleId: sale.id,
+        qtyBefore,
+        qtyAfter,
+        usedWeek: 0,
+        restoredQty,
+      }
+
+      return {
+        ...product,
+        qty: qtyAfter,
+        lastQty: qtyBefore,
+        sold: Math.max(0, (Number(product.sold) || 0) - restoredQty),
+        countHistory: [
+          ...(product.countHistory || []).map(entry => entry.saleId === sale.id
+            ? { ...entry, usedWeek: 0, voided: true }
+            : entry
+          ),
+          voidSnapshot,
+        ].slice(-20),
+      }
+    }))
+
+    setSales(prev => prev.map(item => item.id === saleId
+      ? {
+          ...item,
+          voided: true,
+          voidedAt: new Date().toISOString(),
+          voidReason: reason,
+          voidNote: note?.trim() || '',
+        }
+      : item
+    ))
+  }
+
   function deleteProduct(id) {
     if (confirm('Remove this product from inventory?')) {
       setProducts(prev => prev.filter(product => product.id !== id))
@@ -207,7 +364,7 @@ export default function App() {
   }
 
   function exportBackup() {
-    const data = JSON.stringify({ products, sales, clients }, null, 2)
+    const data = JSON.stringify({ products, sales, clients, expenses, cashDrawer }, null, 2)
     const blob = new Blob([data], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
@@ -232,7 +389,9 @@ export default function App() {
           setProducts(imported.products)
           setSales(Array.isArray(imported.sales) ? imported.sales : [])
           setClients(Array.isArray(imported.clients) ? imported.clients : [])
-          alert(`Successfully imported ${imported.products.length} products, ${Array.isArray(imported.sales) ? imported.sales.length : 0} sales, and ${Array.isArray(imported.clients) ? imported.clients.length : 0} clients!`)
+          setExpenses(Array.isArray(imported.expenses) ? imported.expenses : [])
+          setCashDrawer(imported.cashDrawer && typeof imported.cashDrawer === 'object' ? imported.cashDrawer : {})
+          alert(`Successfully imported ${imported.products.length} products, ${Array.isArray(imported.sales) ? imported.sales.length : 0} sales, ${Array.isArray(imported.clients) ? imported.clients.length : 0} clients, ${Array.isArray(imported.expenses) ? imported.expenses.length : 0} expenses, and cash drawer records!`)
         } else {
           alert('Invalid file. Please use a valid backup JSON file.')
         }
@@ -243,8 +402,6 @@ export default function App() {
     reader.readAsText(file)
     event.target.value = ''
   }
-
-  const activeTab = tabs.find(item => item.id === tab)
 
   return (
     <div className={navCollapsed ? 'app-shell nav-collapsed' : 'app-shell'}>
@@ -298,22 +455,7 @@ export default function App() {
       </aside>
 
       <main className="main-workspace">
-        <header className="workspace-header">
-          <div>
-            <div className="eyebrow">Counter mode</div>
-            <h2>{activeTab?.label}</h2>
-          </div>
-          <div className="header-actions">
-            <button onClick={openNewProduct} className="header-add-button">
-              Add product
-            </button>
-            <button onClick={openNewService} className="header-service-button">
-              Add service
-            </button>
-          </div>
-        </header>
-
-        {tab !== 'pos' && <Dashboard products={products} />}
+        {tab !== 'pos' && tab !== 'sales-report' && <Dashboard products={products} />}
 
         {tab === 'inventory' && (
           <ProductTable
@@ -329,6 +471,10 @@ export default function App() {
             products={products}
             sales={sales}
             clients={clients}
+            orders={orders}
+            activeOrderId={activeOrderId}
+            setOrders={setOrders}
+            setActiveOrderId={setActiveOrderId}
             onCompleteSale={completeSale}
             onSaveClient={saveClientName}
             onEditProduct={openEdit}
@@ -336,6 +482,18 @@ export default function App() {
           />
         )}
         {tab === 'analytics' && <Analytics products={products} onApplyReorderLevels={applyTrendReorderLevels} />}
+        {tab === 'sales-report' && (
+          <SalesReport
+            sales={sales}
+            expenses={expenses}
+            openingCashRecord={cashDrawer[currentDayKey]}
+            onAddExpense={addExpense}
+            onDeleteExpense={deleteExpense}
+            onVoidSale={voidSale}
+            onSetOpeningCash={setOpeningCash}
+            onSetClosingCash={setClosingCash}
+          />
+        )}
         {tab === 'report' && <Report products={products} />}
       </main>
 
@@ -363,6 +521,36 @@ export default function App() {
           onUndo={saveUndo}
           onClose={() => setUndoProduct(null)}
         />
+      )}
+
+      {needsOpeningCash && (
+        <div className="client-modal-backdrop">
+          <form className="client-modal opening-cash-start-modal" onSubmit={submitOpeningCashPrompt}>
+            <div>
+              <span className="eyebrow">Start of shift</span>
+              <h3>Check money box</h3>
+              <p>Enter the cash already inside the box before using POS today. Type 0 if the box is empty.</p>
+            </div>
+
+            <label className="client-name-field">
+              <span>Opening cash</span>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={openingCashPrompt}
+                onChange={event => setOpeningCashPrompt(event.target.value)}
+                placeholder="0.00"
+                required
+                autoFocus
+              />
+            </label>
+
+            <button type="submit" className="complete-sale-button">
+              Start POS
+            </button>
+          </form>
+        </div>
       )}
     </div>
   )

@@ -1,143 +1,181 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { getStatus } from '../utils/status'
 import { getUsageInLastDays } from '../utils/usage'
 
-const statusStyle = {
-  ok:       { background: '#E1F5EE', color: '#085041' },
-  low:      { background: '#FAEEDA', color: '#633806' },
-  critical: { background: '#FCEBEB', color: '#791F1F' },
-}
-
 const statusLabel = { ok: 'OK', low: 'Low stock', critical: 'Critical' }
+const money = value => `PHP ${Number(value || 0).toFixed(2)}`
 const withUnit = (value, unit) => unit ? `${value} ${unit}` : String(value)
 
 export default function ProductTable({ products, onEdit, onDelete, onRestock, onUndo }) {
-  const [search, setSearch]             = useState('')
-  const [filterCat, setFilterCat]       = useState('')
+  const [search, setSearch] = useState('')
+  const [filterCat, setFilterCat] = useState('')
   const [filterStatus, setFilterStatus] = useState('')
 
-  const cats = [...new Set(products.map(p => p.cat))].sort()
+  const categories = useMemo(
+    () => [...new Set(products.map(product => product.cat).filter(Boolean))].sort(),
+    [products]
+  )
 
-  const filtered = products.filter(p => {
-    const s = getStatus(p)
-    return (
-      (!search       || p.name.toLowerCase().includes(search.toLowerCase()) || p.cat.toLowerCase().includes(search.toLowerCase()))
-      && (!filterCat    || p.cat === filterCat)
-      && (!filterStatus || s === filterStatus)
-    )
-  })
+  const summary = useMemo(() => {
+    const stockProducts = products.filter(product => product.trackStock !== false)
+    return {
+      total: products.length,
+      services: products.length - stockProducts.length,
+      critical: stockProducts.filter(product => getStatus(product) === 'critical').length,
+      low: stockProducts.filter(product => getStatus(product) === 'low').length,
+    }
+  }, [products])
+
+  const filtered = useMemo(() => {
+    const term = search.trim().toLowerCase()
+    return products
+      .filter(product => {
+        const status = getStatus(product)
+        const matchesSearch = !term
+          || product.name.toLowerCase().includes(term)
+          || product.cat.toLowerCase().includes(term)
+        return matchesSearch
+          && (!filterCat || product.cat === filterCat)
+          && (!filterStatus || status === filterStatus)
+      })
+      .sort((a, b) => {
+        const statusWeight = { critical: 0, low: 1, ok: 2 }
+        const statusDiff = statusWeight[getStatus(a)] - statusWeight[getStatus(b)]
+        if (statusDiff !== 0) return statusDiff
+        return a.name.localeCompare(b.name)
+      })
+  }, [products, search, filterCat, filterStatus])
 
   if (products.length === 0) {
     return (
-      <div style={{ background: '#fff', border: '1px solid #eee', borderRadius: 10, padding: '3rem', textAlign: 'center', color: '#888' }}>
-        <div style={{ fontSize: 32, marginBottom: 12 }}>📦</div>
-        <div style={{ fontWeight: 600, marginBottom: 6 }}>No products yet</div>
-        <div style={{ fontSize: 13 }}>Click <strong>+ Add product</strong> to start building your inventory.</div>
-      </div>
+      <section className="inventory-empty-state">
+        <strong>No products yet</strong>
+        <span>Add your first product or service to start managing inventory.</span>
+      </section>
     )
   }
 
   return (
-    <div>
-      {/* Filters */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
-        <input
-          placeholder="Search product or category..."
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          style={{ flex: 1, minWidth: 160, padding: '7px 10px', border: '1px solid #ddd', borderRadius: 8, fontSize: 13 }}
-        />
-        <select value={filterCat} onChange={e => setFilterCat(e.target.value)}
-          style={{ padding: '7px 10px', border: '1px solid #ddd', borderRadius: 8, fontSize: 13 }}>
-          <option value="">All categories</option>
-          {cats.map(c => <option key={c}>{c}</option>)}
-        </select>
-        <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
-          style={{ padding: '7px 10px', border: '1px solid #ddd', borderRadius: 8, fontSize: 13 }}>
-          <option value="">All status</option>
-          <option value="ok">OK</option>
-          <option value="low">Low stock</option>
-          <option value="critical">Critical</option>
-        </select>
+    <section className="inventory-page">
+      <div className="inventory-summary-grid">
+        <div className="inventory-summary-card">
+          <span>Total items</span>
+          <strong>{summary.total}</strong>
+          <small>{summary.services} services included</small>
+        </div>
+        <div className="inventory-summary-card danger">
+          <span>Critical</span>
+          <strong>{summary.critical}</strong>
+          <small>Need attention first</small>
+        </div>
+        <div className="inventory-summary-card warning">
+          <span>Low stock</span>
+          <strong>{summary.low}</strong>
+          <small>Watch or restock soon</small>
+        </div>
       </div>
 
-      {/* Table */}
-      <div style={{ overflowX: 'auto', border: '1px solid #eee', borderRadius: 10 }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+      <div className="inventory-toolbar">
+        <label className="inventory-search">
+          <span>Search inventory</span>
+          <input
+            placeholder="Search product or category"
+            value={search}
+            onChange={event => setSearch(event.target.value)}
+          />
+        </label>
+        <label>
+          <span>Category</span>
+          <select value={filterCat} onChange={event => setFilterCat(event.target.value)}>
+            <option value="">All categories</option>
+            {categories.map(category => <option key={category}>{category}</option>)}
+          </select>
+        </label>
+        <label>
+          <span>Status</span>
+          <select value={filterStatus} onChange={event => setFilterStatus(event.target.value)}>
+            <option value="">All status</option>
+            <option value="critical">Critical</option>
+            <option value="low">Low stock</option>
+            <option value="ok">OK</option>
+          </select>
+        </label>
+      </div>
+
+      <div className="inventory-table-shell">
+        <table className="inventory-table">
           <thead>
-            <tr style={{ background: '#f9f9f9' }}>
-              {['Product', 'Category', 'Qty', 'Unit', 'Price', 'Reorder at', 'Used this week', 'Status', 'Actions'].map(h => (
-                <th key={h} style={{ textAlign: 'left', padding: '9px 12px', borderBottom: '1px solid #eee', fontWeight: 500, color: '#666', fontSize: 12, whiteSpace: 'nowrap' }}>{h}</th>
-              ))}
+            <tr>
+              <th>Product</th>
+              <th>Stock</th>
+              <th>Price</th>
+              <th>Reorder</th>
+              <th>7-day use</th>
+              <th>Status</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 ? (
               <tr>
-                <td colSpan={9} style={{ padding: '2rem', textAlign: 'center', color: '#aaa' }}>No products match your filters.</td>
+                <td colSpan={7}>
+                  <div className="inventory-empty-row">No products match your filters.</div>
+                </td>
               </tr>
-            ) : filtered.map(p => {
-              const s            = getStatus(p)
-              const usedThisWeek = getUsageInLastDays(p)
-              const tracksStock = p.trackStock !== false
-              const needsRestock = tracksStock && (s === 'low' || s === 'critical')
+            ) : filtered.map(product => {
+              const status = getStatus(product)
+              const tracksStock = product.trackStock !== false
+              const usedThisWeek = getUsageInLastDays(product)
+              const needsRestock = tracksStock && (status === 'low' || status === 'critical')
+              const canUndo = (product.countHistory && product.countHistory.length > 0)
+                || (product.restockHistory && product.restockHistory.length > 0)
 
               return (
-                <tr key={p.id} style={{ borderBottom: '1px solid #f5f5f5', background: s === 'critical' ? '#fff9f9' : 'transparent' }}>
-                  <td style={{ padding: '9px 12px', fontWeight: 500 }}>{p.name}</td>
-                  <td style={{ padding: '9px 12px' }}>
-                    <span style={{ background: '#f0f0f0', color: '#555', padding: '2px 8px', borderRadius: 20, fontSize: 11, fontWeight: 500 }}>{p.cat}</span>
+                <tr key={product.id} className={`inventory-row status-${status}`}>
+                  <td data-label="Product">
+                    <div className="inventory-product-cell">
+                      <strong>{product.name}</strong>
+                      <span>{product.cat || 'Uncategorized'}</span>
+                    </div>
                   </td>
-                  <td style={{ padding: '9px 12px', fontWeight: 700, color: s === 'critical' ? '#A32D2D' : s === 'low' ? '#BA7517' : '#1a1a1a' }}>
-                    {tracksStock ? p.qty : 'Service'}
+                  <td data-label="Stock">
+                    <strong className="inventory-stock-count">
+                      {tracksStock ? withUnit(product.qty, product.unit) : 'Service'}
+                    </strong>
                   </td>
-                  <td style={{ padding: '9px 12px', color: '#888' }}>{tracksStock ? (p.unit || '—') : '—'}</td>
-                  <td style={{ padding: '9px 12px', color: Number(p.price) > 0 ? '#333' : '#aaa', fontWeight: Number(p.price) > 0 ? 600 : 400 }}>
-                    {Number(p.price) > 0 ? `PHP ${Number(p.price).toFixed(2)}` : 'No price'}
+                  <td data-label="Price">
+                    <strong className={Number(product.price) > 0 ? '' : 'muted-value'}>
+                      {Number(product.price) > 0 ? money(product.price) : 'No price'}
+                    </strong>
                   </td>
-                  <td style={{ padding: '9px 12px', color: '#888' }}>{tracksStock ? p.reorder : '—'}</td>
-                  <td style={{ padding: '9px 12px', color: usedThisWeek > 0 ? '#0F6E56' : '#bbb', fontWeight: usedThisWeek > 0 ? 600 : 400 }}>
-                    {usedThisWeek > 0 ? withUnit(usedThisWeek, p.unit) : '—'}
+                  <td data-label="Reorder">
+                    {tracksStock ? withUnit(product.reorder || 0, product.unit) : 'Not tracked'}
                   </td>
-                  <td style={{ padding: '9px 12px' }}>
-                    <span style={{ ...statusStyle[s], padding: '3px 9px', borderRadius: 20, fontSize: 11, fontWeight: 500 }}>
-                      {statusLabel[s]}
-                    </span>
+                  <td data-label="7-day use">
+                    <strong className={usedThisWeek > 0 ? 'usage-active' : 'muted-value'}>
+                      {usedThisWeek > 0 ? withUnit(usedThisWeek, product.unit) : 'None'}
+                    </strong>
                   </td>
-                  <td style={{ padding: '9px 12px', whiteSpace: 'nowrap' }}>
-                    {/* Restock button — highlighted when low or critical */}
-                    {tracksStock && (
-                      <button
-                        onClick={() => onRestock(p)}
-                        style={{
-                          marginRight: 4, padding: '4px 10px',
-                          border: needsRestock ? '1px solid #185FA5' : '1px solid #ddd',
-                          borderRadius: 6, cursor: 'pointer', fontSize: 12,
-                          background: needsRestock ? '#185FA5' : '#fff',
-                          color:      needsRestock ? '#fff'     : '#444',
-                          fontWeight: needsRestock ? 600        : 400,
-                        }}
-                        title="Add received stock to current quantity"
-                      >
-                        + Restock
-                      </button>
-                    )}
-                    <button onClick={() => onEdit(p)}
-                      style={{ marginRight: 4, padding: '4px 10px', border: '1px solid #ddd', borderRadius: 6, cursor: 'pointer', background: '#fff', fontSize: 12 }}>
-                      Edit
-                    </button>
-                    {/* Undo button - shown when a count or restock can be reversed */}
-                    {((p.countHistory && p.countHistory.length > 0) || (p.restockHistory && p.restockHistory.length > 0)) && (
-                      <button onClick={() => onUndo(p)}
-                        style={{ marginRight: 4, padding: '4px 10px', border: '1px solid #F9C97C', borderRadius: 6, cursor: 'pointer', background: '#FFF4E5', color: '#92580A', fontSize: 12, fontWeight: 500 }}
-                        title="Undo the latest stock count or restock">
-                        ↩ Undo
-                      </button>
-                    )}
-                    <button onClick={() => onDelete(p.id)}
-                      style={{ padding: '4px 10px', border: '1px solid #fcc', borderRadius: 6, cursor: 'pointer', background: '#fff', color: '#c00', fontSize: 12 }}>
-                      Delete
-                    </button>
+                  <td data-label="Status">
+                    <span className={`inventory-status-pill ${status}`}>{statusLabel[status]}</span>
+                  </td>
+                  <td data-label="Actions">
+                    <div className="inventory-actions">
+                      {tracksStock && (
+                        <button
+                          type="button"
+                          onClick={() => onRestock(product)}
+                          className={needsRestock ? 'restock urgent' : 'restock'}
+                        >
+                          Restock
+                        </button>
+                      )}
+                      <button type="button" onClick={() => onEdit(product)}>Edit</button>
+                      {canUndo && (
+                        <button type="button" onClick={() => onUndo(product)} className="undo">Undo</button>
+                      )}
+                      <button type="button" onClick={() => onDelete(product.id)} className="delete">Delete</button>
+                    </div>
                   </td>
                 </tr>
               )
@@ -145,6 +183,6 @@ export default function ProductTable({ products, onEdit, onDelete, onRestock, on
           </tbody>
         </table>
       </div>
-    </div>
+    </section>
   )
 }
