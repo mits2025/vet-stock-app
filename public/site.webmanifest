@@ -1,0 +1,16 @@
+{
+  "name": "Vet POS",
+  "short_name": "Vet POS",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#eef2f5",
+  "theme_color": "#123247",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

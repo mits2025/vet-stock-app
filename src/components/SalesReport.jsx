@@ -8,6 +8,11 @@ const signedMoney = value => {
 
 const E_CASH_METHODS = ['GCash', 'Card', 'Bank transfer', 'E-cash']
 const VOID_REASONS = ['Refund', 'Wrong payment', 'Wrong item', 'Duplicate sale', 'Customer cancelled']
+const OWNER_PERIODS = [
+  { id: 'month', label: 'This month' },
+  { id: 'year', label: 'This year' },
+  { id: 'all', label: 'All time' },
+]
 
 function dateKey(dateValue) {
   const date = new Date(dateValue)
@@ -17,6 +22,17 @@ function dateKey(dateValue) {
 
 function isToday(dateValue) {
   return dateKey(dateValue) === dateKey(new Date())
+}
+
+function isInOwnerPeriod(dateValue, period) {
+  if (period === 'all') return true
+
+  const date = new Date(dateValue)
+  if (Number.isNaN(date.getTime())) return false
+
+  const now = new Date()
+  if (period === 'year') return date.getFullYear() === now.getFullYear()
+  return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth()
 }
 
 function getPaymentGroup(method) {
@@ -45,6 +61,8 @@ export default function SalesReport({
   sales = [],
   expenses = [],
   openingCashRecord,
+  ownerUnlocked = false,
+  ownerAccessPanel = null,
   onAddExpense,
   onDeleteExpense,
   onVoidSale,
@@ -66,6 +84,7 @@ export default function SalesReport({
     reason: 'Refund',
     note: '',
   })
+  const [ownerPeriod, setOwnerPeriod] = useState('month')
   const [openingCashDraft, setOpeningCashDraft] = useState(String(openingCash || ''))
   const [closingCashDraft, setClosingCashDraft] = useState(hasClosingCash ? String(closingCash) : '')
 
@@ -114,6 +133,55 @@ export default function SalesReport({
       netECash: eCashSales - (expensesByMethod['E-cash'] || 0),
     }
   }, [sales, expenses, openingCash, closingCash, hasClosingCash])
+
+  const ownerReport = useMemo(() => {
+    const periodSales = sales.filter(sale => !sale.voided && isInOwnerPeriod(sale.date, ownerPeriod))
+    const voidedSales = sales.filter(sale => sale.voided && isInOwnerPeriod(sale.date, ownerPeriod))
+    const periodExpenses = expenses.filter(expense => isInOwnerPeriod(expense.date || expense.createdAt, ownerPeriod))
+
+    const salesByMethod = periodSales.reduce((totals, sale) => {
+      const method = sale.paymentMethod || 'Cash'
+      totals[method] = (totals[method] || 0) + (Number(sale.total) || 0)
+      return totals
+    }, {})
+
+    const expensesByCategory = periodExpenses.reduce((totals, expense) => {
+      const category = expense.category || 'General'
+      totals[category] = (totals[category] || 0) + (Number(expense.amount) || 0)
+      return totals
+    }, {})
+
+    const itemSales = periodSales.reduce((totals, sale) => {
+      const saleItems = sale.items || []
+      saleItems.forEach(item => {
+        const name = item.name || item.productName || 'Item'
+        const current = totals[name] || { name, qty: 0, total: 0 }
+        current.qty += Number(item.qty) || 0
+        current.total += Number(item.lineSubtotal) || (Number(item.qty) || 0) * (Number(item.price) || 0)
+        totals[name] = current
+      })
+      return totals
+    }, {})
+
+    const grossSales = periodSales.reduce((sum, sale) => sum + (Number(sale.total) || 0), 0)
+    const totalExpenses = periodExpenses.reduce((sum, expense) => sum + (Number(expense.amount) || 0), 0)
+    const averageSale = periodSales.length ? grossSales / periodSales.length : 0
+
+    return {
+      sales: periodSales,
+      voidedSales,
+      expenses: periodExpenses,
+      salesByMethod,
+      expensesByCategory,
+      topItems: Object.values(itemSales)
+        .sort((a, b) => b.total - a.total)
+        .slice(0, 6),
+      grossSales,
+      totalExpenses,
+      netRevenue: grossSales - totalExpenses,
+      averageSale,
+    }
+  }, [sales, expenses, ownerPeriod])
 
   function submitExpense(event) {
     event.preventDefault()
@@ -423,6 +491,154 @@ export default function SalesReport({
           </div>
         </section>
       </div>
+
+      <section className="owner-report-section">
+        <div className="owner-report-header">
+          <div>
+            <span className="eyebrow">Owner only</span>
+            <h3>Business report</h3>
+            <p>Monthly, yearly, and all-time sales, expenses, and revenue for business review.</p>
+          </div>
+          {ownerUnlocked && (
+            <div className="owner-period-tabs" aria-label="Owner report period">
+              {OWNER_PERIODS.map(period => (
+                <button
+                  key={period.id}
+                  type="button"
+                  className={ownerPeriod === period.id ? 'active' : ''}
+                  onClick={() => setOwnerPeriod(period.id)}
+                >
+                  {period.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {!ownerUnlocked ? ownerAccessPanel : (
+          <div className="owner-report-body">
+            <div className="money-summary-grid owner-summary-grid">
+              <div className="money-card primary">
+                <span>Gross sales</span>
+                <strong>{money(ownerReport.grossSales)}</strong>
+                <small>{ownerReport.sales.length} completed sales</small>
+              </div>
+              <div className="money-card negative">
+                <span>Expenses</span>
+                <strong>{money(ownerReport.totalExpenses)}</strong>
+                <small>{ownerReport.expenses.length} recorded costs</small>
+              </div>
+              <div className={ownerReport.netRevenue < 0 ? 'money-card net negative' : 'money-card net'}>
+                <span>Net revenue</span>
+                <strong>{money(ownerReport.netRevenue)}</strong>
+                <small>Gross sales minus expenses</small>
+              </div>
+              <div className="money-card cash">
+                <span>Average sale</span>
+                <strong>{money(ownerReport.averageSale)}</strong>
+                <small>{ownerReport.voidedSales.length} voided sales excluded</small>
+              </div>
+            </div>
+
+            <div className="owner-report-grid">
+              <section className="sales-report-panel">
+                <div className="panel-heading compact">
+                  <div>
+                    <span className="eyebrow">Revenue source</span>
+                    <h4>Sales by payment</h4>
+                  </div>
+                </div>
+                <div className="payment-breakdown-list">
+                  {['Cash', 'GCash', 'Card', 'Bank transfer'].map(method => (
+                    <div key={method}>
+                      <span>{method}</span>
+                      <strong>{money(ownerReport.salesByMethod[method] || 0)}</strong>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="sales-report-panel">
+                <div className="panel-heading compact">
+                  <div>
+                    <span className="eyebrow">Cost control</span>
+                    <h4>Expenses by category</h4>
+                  </div>
+                </div>
+                <div className="owner-mini-list">
+                  {Object.entries(ownerReport.expensesByCategory).length === 0 ? (
+                    <div className="report-empty">No expenses in this period.</div>
+                  ) : Object.entries(ownerReport.expensesByCategory)
+                    .sort((a, b) => b[1] - a[1])
+                    .slice(0, 6)
+                    .map(([category, amount]) => (
+                      <div key={category} className="owner-mini-row">
+                        <span>{category}</span>
+                        <strong>{money(amount)}</strong>
+                      </div>
+                    ))}
+                </div>
+              </section>
+
+              <section className="sales-report-panel">
+                <div className="panel-heading compact">
+                  <div>
+                    <span className="eyebrow">Performance</span>
+                    <h4>Top items and services</h4>
+                  </div>
+                </div>
+                <div className="owner-mini-list">
+                  {ownerReport.topItems.length === 0 ? (
+                    <div className="report-empty">No item sales in this period.</div>
+                  ) : ownerReport.topItems.map(item => (
+                    <div key={item.name} className="owner-mini-row">
+                      <span>{item.name} <small>{item.qty} sold</small></span>
+                      <strong>{money(item.total)}</strong>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="sales-report-panel">
+                <div className="panel-heading compact">
+                  <div>
+                    <span className="eyebrow">Audit</span>
+                    <h4>Recent business activity</h4>
+                  </div>
+                </div>
+                <div className="recent-report-list">
+                  {ownerReport.sales.length === 0 && ownerReport.expenses.length === 0 ? (
+                    <div className="report-empty">No activity in this period.</div>
+                  ) : [
+                    ...ownerReport.sales.slice(0, 4).map(sale => ({
+                      id: `sale-${sale.id}`,
+                      title: sale.clientName || 'Walk-in client',
+                      detail: `${formatDate(sale.date)} | ${sale.paymentMethod || 'Cash'}`,
+                      amount: money(sale.total),
+                      type: 'sale',
+                    })),
+                    ...ownerReport.expenses.slice(0, 4).map(expense => ({
+                      id: `expense-${expense.id}`,
+                      title: expense.category || 'General',
+                      detail: `${formatDate(expense.date || expense.createdAt)} | ${expense.paymentMethod || 'Cash'}`,
+                      amount: `-${money(expense.amount)}`,
+                      type: 'expense',
+                    })),
+                  ].slice(0, 8).map(activity => (
+                    <div key={activity.id} className={activity.type === 'expense' ? 'report-row expense compact-row' : 'report-row compact-row'}>
+                      <div>
+                        <strong>{activity.title}</strong>
+                        <span>{activity.detail}</span>
+                      </div>
+                      <b>{activity.amount}</b>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            </div>
+          </div>
+        )}
+      </section>
 
       {voidDraft.sale && (
         <div className="client-modal-backdrop">

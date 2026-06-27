@@ -19,16 +19,23 @@ const defaultClientLabel = () => `Client ${new Date().toLocaleString('en-PH', {
   hour: 'numeric',
   minute: '2-digit',
 })}`
+const formatReceiptDate = dateValue => new Date(dateValue).toLocaleString('en-PH', {
+  month: 'short',
+  day: 'numeric',
+  year: 'numeric',
+  hour: 'numeric',
+  minute: '2-digit',
+})
 
 export default function POS({
   products,
-  sales,
   clients = [],
   orders,
   activeOrderId,
   setOrders,
   setActiveOrderId,
   onCompleteSale,
+  receiptSettings = {},
   onEditProduct,
   onRestockProduct,
   onSaveClient,
@@ -40,6 +47,7 @@ export default function POS({
   const [clientModalOpen, setClientModalOpen] = useState(false)
   const [clientDraftName, setClientDraftName] = useState('')
   const [clientSuggestionsOpen, setClientSuggestionsOpen] = useState(false)
+  const [receiptSale, setReceiptSale] = useState(null)
   const activeOrder = orders.find(order => order.id === activeOrderId) || orders[0]
   const cart = activeOrder?.cart || []
   const itemDiscounts = activeOrder?.itemDiscounts || {}
@@ -109,9 +117,6 @@ export default function POS({
   }, 0)
   const total = Math.max(0, subtotal - discountTotal)
   const itemCount = cart.reduce((sum, item) => sum + item.qty, 0)
-  const todayKey = new Date().toISOString().slice(0, 10)
-  const todaySales = sales.filter(sale => !sale.voided && sale.date?.slice(0, 10) === todayKey)
-  const todayRevenue = todaySales.reduce((sum, sale) => sum + (Number(sale.total) || 0), 0)
 
   function updateActiveOrder(updater) {
     setOrders(prev => prev.map(order => {
@@ -261,34 +266,41 @@ export default function POS({
       return
     }
 
-    onCompleteSale({
-      items: cart.map(item => {
-        const lineSubtotal = item.qty * item.price
-        const discountPercent = Math.min(100, Math.max(0, Number(itemDiscounts[item.productId]) || 0))
-        const discount = discountAmount(lineSubtotal, discountPercent)
-        return {
-          productId: item.productId,
-          name: item.name,
-          unit: item.unit,
-          price: item.price,
-          qty: item.qty,
-          consumesProductId: item.consumesProductId,
-          consumedProductName: item.consumedProductName,
-          consumedProductUnit: item.consumedProductUnit,
-          consumptionPerSale: item.consumptionPerSale,
-          discount,
-          discountPercent,
-          lineSubtotal,
-          lineTotal: Math.max(0, lineSubtotal - discount),
-        }
-      }),
+    const receiptItems = cart.map(item => {
+      const lineSubtotal = item.qty * item.price
+      const discountPercent = Math.min(100, Math.max(0, Number(itemDiscounts[item.productId]) || 0))
+      const discount = discountAmount(lineSubtotal, discountPercent)
+      return {
+        productId: item.productId,
+        name: item.name,
+        unit: item.unit,
+        price: item.price,
+        qty: item.qty,
+        consumesProductId: item.consumesProductId,
+        consumedProductName: item.consumedProductName,
+        consumedProductUnit: item.consumedProductUnit,
+        consumptionPerSale: item.consumptionPerSale,
+        discount,
+        discountPercent,
+        lineSubtotal,
+        lineTotal: Math.max(0, lineSubtotal - discount),
+      }
+    })
+
+    const completedSale = onCompleteSale({
+      items: receiptItems,
       paymentMethod,
       discount: discountTotal,
       clientName: activeOrder?.clientName?.trim() || '',
     })
+    if (completedSale) setReceiptSale(completedSale)
     if (activeOrder) removeOrderPage(activeOrder.id)
     setCheckoutOpen(false)
     setPaymentMethod('Cash')
+  }
+
+  function printReceipt() {
+    window.print()
   }
 
   function handleProductTile(product) {
@@ -327,7 +339,14 @@ export default function POS({
               <h3>Checkout</h3>
               <p>Review the order, apply item discounts, then choose the buyer payment mode.</p>
             </div>
-            <button onClick={() => setCheckoutOpen(false)} className="secondary-page-button danger-page-button">Back to POS</button>
+            <button
+              onClick={() => setCheckoutOpen(false)}
+              className="secondary-page-button danger-page-button checkout-back-button"
+              aria-label="Back to POS"
+              title="Back to POS"
+            >
+              <i className="fi fi-rr-arrow-left" aria-hidden="true"></i>
+            </button>
           </div>
 
           <div className="checkout-item-list">
@@ -468,16 +487,6 @@ export default function POS({
               placeholder="Search item or category"
               autoComplete="off"
             />
-          </div>
-          <div className="pos-today-strip">
-            <div>
-              <span>Today sales</span>
-              <strong>{todaySales.length}</strong>
-            </div>
-            <div>
-              <span>Revenue</span>
-              <strong>{money(todayRevenue)}</strong>
-            </div>
           </div>
         </div>
 
@@ -691,6 +700,72 @@ export default function POS({
               </button>
               <button type="button" onClick={addOrderPage} className="complete-sale-button">
                 Start order
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {receiptSale && (
+        <div className="client-modal-backdrop receipt-backdrop">
+          <div className="client-modal receipt-modal" role="dialog" aria-modal="true" aria-labelledby="receipt-title">
+            <div
+              className="receipt-paper"
+              id="receipt-print-area"
+              style={{ '--receipt-paper-width': receiptSettings.paperWidth === '58' ? '50mm' : '72mm' }}
+            >
+              <div className="receipt-head">
+                {receiptSettings.logo && (
+                  <img className="receipt-logo" src={receiptSettings.logo} alt="" />
+                )}
+                <strong id="receipt-title">{receiptSettings.clinicName || 'Vet POS'}</strong>
+                {receiptSettings.address && <span>{receiptSettings.address}</span>}
+                {receiptSettings.phone && <span>{receiptSettings.phone}</span>}
+                {receiptSettings.email && <span>{receiptSettings.email}</span>}
+                {receiptSettings.tin && <span>TIN: {receiptSettings.tin}</span>}
+                <span>Official Receipt</span>
+                <small>{formatReceiptDate(receiptSale.date)}</small>
+              </div>
+
+              <div className="receipt-meta">
+                <span>Receipt #</span>
+                <strong>{receiptSale.id}</strong>
+                <span>Client</span>
+                <strong>{receiptSale.clientName || 'Walk-in client'}</strong>
+                <span>Payment</span>
+                <strong>{receiptSale.paymentMethod || 'Cash'}</strong>
+              </div>
+
+              <div className="receipt-items">
+                {(receiptSale.items || []).map((item, index) => (
+                  <div key={`${receiptSale.id}-${item.productId || item.name}-${index}`} className="receipt-item">
+                    <div>
+                      <strong>{item.name}</strong>
+                      <span>{item.qty} x {money(item.price)}{item.discount ? ` | discount ${money(item.discount)}` : ''}</span>
+                    </div>
+                    <b>{money(item.lineTotal ?? item.lineSubtotal ?? item.qty * item.price)}</b>
+                  </div>
+                ))}
+              </div>
+
+              <div className="receipt-totals">
+                <div><span>Subtotal</span><strong>{money(receiptSale.subtotal)}</strong></div>
+                <div><span>Discount</span><strong>-{money(receiptSale.discount)}</strong></div>
+                <div className="receipt-grand-total"><span>Total</span><strong>{money(receiptSale.total)}</strong></div>
+              </div>
+
+              <div className="receipt-foot">
+                <span>{receiptSettings.footer || 'Thank you for your visit.'}</span>
+                <small>Generated by Vet POS</small>
+              </div>
+            </div>
+
+            <div className="receipt-actions">
+              <button type="button" className="secondary-page-button" onClick={() => setReceiptSale(null)}>
+                Done
+              </button>
+              <button type="button" className="complete-sale-button" onClick={printReceipt}>
+                Print receipt
               </button>
             </div>
           </div>

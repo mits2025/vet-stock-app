@@ -9,20 +9,50 @@ import Analytics from './components/Analytics'
 import Report from './components/Report'
 import POS from './components/POS'
 import SalesReport from './components/SalesReport'
+import ClientHistory from './components/ClientHistory'
+import Settings from './components/Settings'
 
 const tabs = [
-  { id: 'pos', label: 'Checkout', short: 'POS' },
-  { id: 'inventory', label: 'Inventory', short: 'Stock' },
-  { id: 'analytics', label: 'Analytics', short: 'Stats' },
-  { id: 'sales-report', label: 'Sales Report', short: 'Sales' },
-  { id: 'report', label: 'Reports', short: 'Report' },
+  { id: 'pos', label: 'Checkout', short: 'POS', icon: 'fi-rr-shopping-cart' },
+  { id: 'inventory', label: 'Inventory', short: 'Stock', icon: 'fi-rr-boxes' },
+  { id: 'analytics', label: 'Analytics', short: 'Stats', icon: 'fi-rr-chart-histogram' },
+  { id: 'sales-report', label: 'Sales Report', short: 'Sales', icon: 'fi-rr-cash-register' },
+  { id: 'clients', label: 'Clients', short: 'Clients', icon: 'fi-rr-users' },
+  { id: 'report', label: 'Reports', short: 'Report', icon: 'fi-rr-document' },
+  { id: 'settings', label: 'Settings', short: 'Settings', icon: 'fi-rr-settings' },
 ]
+
+const PASSWORD_KEY = 'vet-app-password'
+const OWNER_PASSWORD_KEY = 'vet-owner-password'
+const RECEIPT_SETTINGS_KEY = 'vet-receipt-settings'
+const DEFAULT_RECEIPT_SETTINGS = {
+  clinicName: 'Vet POS',
+  address: '',
+  phone: '',
+  tin: '',
+  email: '',
+  footer: 'Thank you for your visit.',
+  paperWidth: '80',
+  logo: '',
+}
 
 function todayKey() {
   const date = new Date()
   const month = String(date.getMonth() + 1).padStart(2, '0')
   const day = String(date.getDate()).padStart(2, '0')
   return `${date.getFullYear()}-${month}-${day}`
+}
+
+function createSalt() {
+  const values = new Uint8Array(16)
+  crypto.getRandomValues(values)
+  return Array.from(values, value => value.toString(16).padStart(2, '0')).join('')
+}
+
+async function hashPassword(password, salt) {
+  const encoded = new TextEncoder().encode(`${salt}:${password}`)
+  const digest = await crypto.subtle.digest('SHA-256', encoded)
+  return Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, '0')).join('')
 }
 
 export default function App() {
@@ -46,6 +76,10 @@ export default function App() {
     const saved = localStorage.getItem('vet-cash-drawer')
     return saved ? JSON.parse(saved) : {}
   })
+  const [receiptSettings, setReceiptSettings] = useState(() => {
+    const saved = localStorage.getItem(RECEIPT_SETTINGS_KEY)
+    return saved ? { ...DEFAULT_RECEIPT_SETTINGS, ...JSON.parse(saved) } : DEFAULT_RECEIPT_SETTINGS
+  })
   const [tab, setTab] = useState('pos')
   const [modalOpen, setModalOpen] = useState(false)
   const [editProduct, setEditProduct] = useState(null)
@@ -56,6 +90,26 @@ export default function App() {
   const [openingCashPrompt, setOpeningCashPrompt] = useState('')
   const [orders, setOrders] = useState([])
   const [activeOrderId, setActiveOrderId] = useState('')
+  const [passwordRecord, setPasswordRecord] = useState(() => {
+    const saved = localStorage.getItem(PASSWORD_KEY)
+    return saved ? JSON.parse(saved) : null
+  })
+  const [ownerPasswordRecord, setOwnerPasswordRecord] = useState(() => {
+    const saved = localStorage.getItem(OWNER_PASSWORD_KEY)
+    return saved ? JSON.parse(saved) : null
+  })
+  const [isUnlocked, setIsUnlocked] = useState(false)
+  const [ownerUnlocked, setOwnerUnlocked] = useState(false)
+  const [unlockPassword, setUnlockPassword] = useState('')
+  const [setupPassword, setSetupPassword] = useState('')
+  const [setupConfirm, setSetupConfirm] = useState('')
+  const [ownerPassword, setOwnerPassword] = useState('')
+  const [ownerSetupPassword, setOwnerSetupPassword] = useState('')
+  const [ownerSetupConfirm, setOwnerSetupConfirm] = useState('')
+  const [authError, setAuthError] = useState('')
+  const [ownerAuthError, setOwnerAuthError] = useState('')
+  const [authBusy, setAuthBusy] = useState(false)
+  const [ownerAuthBusy, setOwnerAuthBusy] = useState(false)
   const currentDayKey = todayKey()
   const needsOpeningCash = tab === 'pos' && !cashDrawer[currentDayKey]
 
@@ -78,6 +132,30 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('vet-cash-drawer', JSON.stringify(cashDrawer))
   }, [cashDrawer])
+
+  useEffect(() => {
+    localStorage.setItem(RECEIPT_SETTINGS_KEY, JSON.stringify(receiptSettings))
+  }, [receiptSettings])
+
+  useEffect(() => {
+    if (!passwordRecord) return undefined
+
+    const lockApp = () => {
+      setIsUnlocked(false)
+      setOwnerUnlocked(false)
+    }
+    const lockWhenHidden = () => {
+      if (document.visibilityState === 'hidden') lockApp()
+    }
+
+    document.addEventListener('visibilitychange', lockWhenHidden)
+    window.addEventListener('pagehide', lockApp)
+
+    return () => {
+      document.removeEventListener('visibilitychange', lockWhenHidden)
+      window.removeEventListener('pagehide', lockApp)
+    }
+  }, [passwordRecord])
 
   function saveProduct(data) {
     if (data.id) {
@@ -203,6 +281,7 @@ export default function App() {
       }
     }))
     setSales(prev => [sale, ...prev])
+    return sale
   }
 
   function addExpense(expense) {
@@ -364,7 +443,7 @@ export default function App() {
   }
 
   function exportBackup() {
-    const data = JSON.stringify({ products, sales, clients, expenses, cashDrawer }, null, 2)
+    const data = JSON.stringify({ products, sales, clients, expenses, cashDrawer, receiptSettings }, null, 2)
     const blob = new Blob([data], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
@@ -391,6 +470,10 @@ export default function App() {
           setClients(Array.isArray(imported.clients) ? imported.clients : [])
           setExpenses(Array.isArray(imported.expenses) ? imported.expenses : [])
           setCashDrawer(imported.cashDrawer && typeof imported.cashDrawer === 'object' ? imported.cashDrawer : {})
+          setReceiptSettings(imported.receiptSettings && typeof imported.receiptSettings === 'object'
+            ? { ...DEFAULT_RECEIPT_SETTINGS, ...imported.receiptSettings }
+            : DEFAULT_RECEIPT_SETTINGS
+          )
           alert(`Successfully imported ${imported.products.length} products, ${Array.isArray(imported.sales) ? imported.sales.length : 0} sales, ${Array.isArray(imported.clients) ? imported.clients.length : 0} clients, ${Array.isArray(imported.expenses) ? imported.expenses.length : 0} expenses, and cash drawer records!`)
         } else {
           alert('Invalid file. Please use a valid backup JSON file.')
@@ -403,59 +486,320 @@ export default function App() {
     event.target.value = ''
   }
 
+  async function submitPasswordSetup(event) {
+    event.preventDefault()
+    const password = setupPassword.trim()
+
+    if (password.length < 4) {
+      setAuthError('Use at least 4 characters for the app password.')
+      return
+    }
+
+    if (password !== setupConfirm.trim()) {
+      setAuthError('The passwords do not match.')
+      return
+    }
+
+    setAuthBusy(true)
+    setAuthError('')
+
+    try {
+      const salt = createSalt()
+      const record = {
+        salt,
+        hash: await hashPassword(password, salt),
+        createdAt: new Date().toISOString(),
+      }
+      localStorage.setItem(PASSWORD_KEY, JSON.stringify(record))
+      setPasswordRecord(record)
+      setIsUnlocked(true)
+      setSetupPassword('')
+      setSetupConfirm('')
+    } catch {
+      setAuthError('Could not save the app password. Please try again.')
+    } finally {
+      setAuthBusy(false)
+    }
+  }
+
+  async function submitUnlock(event) {
+    event.preventDefault()
+    if (!passwordRecord) return
+
+    setAuthBusy(true)
+    setAuthError('')
+
+    try {
+      const hash = await hashPassword(unlockPassword, passwordRecord.salt)
+      if (hash !== passwordRecord.hash) {
+        setAuthError('Incorrect password.')
+        setUnlockPassword('')
+        return
+      }
+
+      setIsUnlocked(true)
+      setUnlockPassword('')
+    } catch {
+      setAuthError('Could not unlock the app. Please try again.')
+    } finally {
+      setAuthBusy(false)
+    }
+  }
+
+  async function submitOwnerPasswordSetup(event) {
+    event.preventDefault()
+    const password = ownerSetupPassword.trim()
+
+    if (password.length < 4) {
+      setOwnerAuthError('Use at least 4 characters for the owner password.')
+      return
+    }
+
+    if (password !== ownerSetupConfirm.trim()) {
+      setOwnerAuthError('The passwords do not match.')
+      return
+    }
+
+    setOwnerAuthBusy(true)
+    setOwnerAuthError('')
+
+    try {
+      const salt = createSalt()
+      const record = {
+        salt,
+        hash: await hashPassword(password, salt),
+        createdAt: new Date().toISOString(),
+      }
+      localStorage.setItem(OWNER_PASSWORD_KEY, JSON.stringify(record))
+      setOwnerPasswordRecord(record)
+      setOwnerUnlocked(true)
+      setOwnerSetupPassword('')
+      setOwnerSetupConfirm('')
+    } catch {
+      setOwnerAuthError('Could not save the owner password. Please try again.')
+    } finally {
+      setOwnerAuthBusy(false)
+    }
+  }
+
+  async function submitOwnerUnlock(event) {
+    event.preventDefault()
+    if (!ownerPasswordRecord) return
+
+    setOwnerAuthBusy(true)
+    setOwnerAuthError('')
+
+    try {
+      const hash = await hashPassword(ownerPassword, ownerPasswordRecord.salt)
+      if (hash !== ownerPasswordRecord.hash) {
+        setOwnerAuthError('Incorrect owner password.')
+        setOwnerPassword('')
+        return
+      }
+
+      setOwnerUnlocked(true)
+      setOwnerPassword('')
+    } catch {
+      setOwnerAuthError('Could not unlock owner sales. Please try again.')
+    } finally {
+      setOwnerAuthBusy(false)
+    }
+  }
+
+  function renderOwnerGate() {
+    const isSetup = !ownerPasswordRecord
+
+    return (
+      <section className="sales-access-screen">
+        <form className="app-lock-card sales-access-card" onSubmit={isSetup ? submitOwnerPasswordSetup : submitOwnerUnlock}>
+          <div className="app-lock-brand">
+            <div className="brand-mark">VP</div>
+            <div>
+              <span className="eyebrow">{isSetup ? 'Owner setup' : 'Owner access'}</span>
+              <h1>{isSetup ? 'Create owner password' : 'Unlock business report'}</h1>
+              <p>{isSetup ? 'This password protects monthly, yearly, and all-time sales, expenses, and revenue.' : 'Owner password is required before showing long-range business totals.'}</p>
+            </div>
+          </div>
+
+          <label className="client-name-field">
+            <span>Owner password</span>
+            <input
+              type="password"
+              value={isSetup ? ownerSetupPassword : ownerPassword}
+              onChange={event => {
+                setOwnerAuthError('')
+                if (isSetup) setOwnerSetupPassword(event.target.value)
+                else setOwnerPassword(event.target.value)
+              }}
+              autoComplete={isSetup ? 'new-password' : 'current-password'}
+              minLength={isSetup ? 4 : undefined}
+              required
+            />
+          </label>
+
+          {isSetup && (
+            <label className="client-name-field">
+              <span>Confirm owner password</span>
+              <input
+                type="password"
+                value={ownerSetupConfirm}
+                onChange={event => {
+                  setOwnerAuthError('')
+                  setOwnerSetupConfirm(event.target.value)
+                }}
+                autoComplete="new-password"
+                minLength="4"
+                required
+              />
+            </label>
+          )}
+
+          {ownerAuthError && <div className="app-lock-error">{ownerAuthError}</div>}
+
+          <div className="sales-access-actions">
+            <button type="button" className="secondary-page-button" onClick={() => setTab('pos')}>
+              Back to checkout
+            </button>
+            <button type="submit" className="complete-sale-button" disabled={ownerAuthBusy}>
+              {ownerAuthBusy ? 'Please wait...' : isSetup ? 'Save owner password' : 'Unlock sales'}
+            </button>
+          </div>
+        </form>
+      </section>
+    )
+  }
+
+  if (!passwordRecord || !isUnlocked) {
+    const isSetup = !passwordRecord
+
+    return (
+      <main className="app-lock-screen">
+        <form className="app-lock-card" onSubmit={isSetup ? submitPasswordSetup : submitUnlock}>
+          <div className="app-lock-brand">
+            <div className="brand-mark">VP</div>
+            <div>
+              <span className="eyebrow">{isSetup ? 'First time setup' : 'App locked'}</span>
+              <h1>{isSetup ? 'Create app password' : 'Enter app password'}</h1>
+              <p>{isSetup ? 'This password will be required before the tablet can use Vet POS.' : 'Unlock Vet POS to continue.'}</p>
+            </div>
+          </div>
+
+          <label className="client-name-field">
+            <span>Password</span>
+            <input
+              type="password"
+              value={isSetup ? setupPassword : unlockPassword}
+              onChange={event => {
+                setAuthError('')
+                if (isSetup) setSetupPassword(event.target.value)
+                else setUnlockPassword(event.target.value)
+              }}
+              autoComplete={isSetup ? 'new-password' : 'current-password'}
+              minLength={isSetup ? 4 : undefined}
+              required
+              autoFocus
+            />
+          </label>
+
+          {isSetup && (
+            <label className="client-name-field">
+              <span>Confirm password</span>
+              <input
+                type="password"
+                value={setupConfirm}
+                onChange={event => {
+                  setAuthError('')
+                  setSetupConfirm(event.target.value)
+                }}
+                autoComplete="new-password"
+                minLength="4"
+                required
+              />
+            </label>
+          )}
+
+          {authError && <div className="app-lock-error">{authError}</div>}
+
+          <button type="submit" className="complete-sale-button" disabled={authBusy}>
+            {authBusy ? 'Please wait...' : isSetup ? 'Save password' : 'Unlock app'}
+          </button>
+        </form>
+      </main>
+    )
+  }
+
   return (
     <div className={navCollapsed ? 'app-shell nav-collapsed' : 'app-shell'}>
       <aside className="side-nav">
-        <div className="brand-block">
-          <div className="brand-mark">VP</div>
-          <div>
-            <h1>Vet POS</h1>
-            <p>{new Date().toLocaleDateString('en-PH', { weekday: 'long', month: 'short', day: 'numeric' })}</p>
-          </div>
-          <button
-            type="button"
-            onClick={() => setNavCollapsed(prev => !prev)}
-            className="sidebar-toggle"
-            aria-label={navCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          >
-            <span>{navCollapsed ? '›' : '‹'}</span>
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={() => setNavCollapsed(prev => !prev)}
+          className="sidebar-toggle"
+          aria-label={navCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          title={navCollapsed ? 'Open sidebar' : 'Hide sidebar'}
+        >
+          <i className={`fi ${navCollapsed ? 'fi-rr-angle-small-right' : 'fi-rr-angle-small-left'}`} aria-hidden="true"></i>
+        </button>
 
-        <nav className="nav-stack" aria-label="Primary">
-          {tabs.map(item => (
-            <button
-              key={item.id}
-              onClick={() => setTab(item.id)}
-              className={tab === item.id ? 'nav-button active' : 'nav-button'}
-            >
-              <span className="nav-full">{item.label}</span>
-              <span className="nav-short">{item.short}</span>
-            </button>
-          ))}
-        </nav>
-
-        <div className="nav-actions">
-          <div className="create-actions">
-            <button onClick={openNewProduct} className="primary-action">
-              Add product
-            </button>
-            <button onClick={openNewService} className="service-action">
-              Add service
-            </button>
+        <div className="side-nav-scroll">
+          <div className="brand-block">
+            <div className="brand-mark">VP</div>
+            <div>
+              <h1>Vet POS</h1>
+              <p>{new Date().toLocaleDateString('en-PH', { weekday: 'long', month: 'short', day: 'numeric' })}</p>
+            </div>
           </div>
-          <div className="backup-actions">
-            <button onClick={exportBackup} className="secondary-action">Export</button>
-            <label className="secondary-action">
-              Import
-              <input type="file" accept=".json" onChange={importBackup} hidden />
-            </label>
+
+          <nav className="nav-stack" aria-label="Primary">
+            {tabs.map(item => (
+              <button
+                key={item.id}
+                onClick={() => {
+                  if (item.id !== 'sales-report') setOwnerUnlocked(false)
+                  setTab(item.id)
+                  setNavCollapsed(true)
+                }}
+                className={tab === item.id ? 'nav-button active' : 'nav-button'}
+                title={item.label}
+              >
+                <span className="nav-icon" aria-hidden="true">
+                  <i className={`fi ${item.icon}`}></i>
+                </span>
+                <span className="nav-full">{item.label}</span>
+                <span className="nav-short">{item.short}</span>
+              </button>
+            ))}
+          </nav>
+
+          <div className="nav-actions">
+            <div className="create-actions">
+              <button
+                onClick={() => {
+                  openNewProduct()
+                  setNavCollapsed(true)
+                }}
+                className="primary-action"
+              >
+                <i className="fi fi-rr-box-open" aria-hidden="true"></i>
+                <span>Add product</span>
+              </button>
+              <button
+                onClick={() => {
+                  openNewService()
+                  setNavCollapsed(true)
+                }}
+                className="service-action"
+              >
+                <i className="fi fi-rr-stethoscope" aria-hidden="true"></i>
+                <span>Add service</span>
+              </button>
+            </div>
           </div>
         </div>
       </aside>
 
       <main className="main-workspace">
-        {tab !== 'pos' && tab !== 'sales-report' && <Dashboard products={products} />}
+        {tab !== 'pos' && tab !== 'sales-report' && tab !== 'clients' && tab !== 'settings' && <Dashboard products={products} />}
 
         {tab === 'inventory' && (
           <ProductTable
@@ -469,13 +813,13 @@ export default function App() {
         {tab === 'pos' && (
           <POS
             products={products}
-            sales={sales}
             clients={clients}
             orders={orders}
             activeOrderId={activeOrderId}
             setOrders={setOrders}
             setActiveOrderId={setActiveOrderId}
             onCompleteSale={completeSale}
+            receiptSettings={receiptSettings}
             onSaveClient={saveClientName}
             onEditProduct={openEdit}
             onRestockProduct={product => setRestockProduct(product)}
@@ -487,6 +831,8 @@ export default function App() {
             sales={sales}
             expenses={expenses}
             openingCashRecord={cashDrawer[currentDayKey]}
+            ownerUnlocked={ownerUnlocked}
+            ownerAccessPanel={renderOwnerGate()}
             onAddExpense={addExpense}
             onDeleteExpense={deleteExpense}
             onVoidSale={voidSale}
@@ -494,7 +840,16 @@ export default function App() {
             onSetClosingCash={setClosingCash}
           />
         )}
+        {tab === 'clients' && <ClientHistory clients={clients} sales={sales} receiptSettings={receiptSettings} />}
         {tab === 'report' && <Report products={products} />}
+        {tab === 'settings' && (
+          <Settings
+            receiptSettings={receiptSettings}
+            onSaveReceiptSettings={setReceiptSettings}
+            onExportBackup={exportBackup}
+            onImportBackup={importBackup}
+          />
+        )}
       </main>
 
       {modalOpen && (

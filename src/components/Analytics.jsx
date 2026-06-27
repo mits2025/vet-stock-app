@@ -1063,6 +1063,20 @@ export default function Analytics({ products, onApplyReorderLevels }) {
                       <strong>{group.fastMovingRanked[0].name}</strong>
                       <strong style={{ color: '#0F6E56', whiteSpace: 'nowrap' }}>{group.fastMovingRanked[0].averageWeeklyUsage.toFixed(1)} / wk</strong>
                     </div>
+                    <details className="category-movement-dropdown">
+                      <summary>Ranked products</summary>
+                      <div className="category-movement-rank-list">
+                        {group.fastMovingRanked.slice(0, 5).map((product, index) => (
+                          <div key={product.id} className="category-movement-rank-row">
+                            <span>
+                              <b>{index + 1}</b>
+                              {product.name}
+                            </span>
+                            <strong>{product.averageWeeklyUsage.toFixed(1)} / wk</strong>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
                   </div>
                 ) : (
                   <div style={{ padding: '10px', color: '#aaa', fontSize: 12 }}>No product usage recorded in this category.</div>
