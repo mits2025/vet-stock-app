@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 
 const money = value => `PHP ${Number(value || 0).toFixed(2)}`
 
@@ -30,10 +30,32 @@ function clientKey(name) {
   return name.trim().toLowerCase()
 }
 
-export default function ClientHistory({ clients = [], sales = [], receiptSettings = DEFAULT_RECEIPT_SETTINGS }) {
+function getSalePayments(sale) {
+  if (Array.isArray(sale?.payments) && sale.payments.length > 0) {
+    return sale.payments
+      .map(payment => ({
+        method: payment.method || 'Cash',
+        amount: Math.max(0, Number(payment.amount) || 0),
+      }))
+      .filter(payment => payment.amount > 0)
+  }
+
+  const amount = Math.max(0, Number(sale?.total) || 0)
+  return amount > 0 ? [{ method: sale?.paymentMethod || 'Cash', amount }] : []
+}
+
+function summarizeSalePayments(sale) {
+  const parts = getSalePayments(sale).map(payment => `${payment.method} ${money(payment.amount)}`)
+  const pendingBalance = Math.max(0, Number(sale?.pendingBalance) || 0)
+  if (pendingBalance > 0) parts.push(`Pending ${money(pendingBalance)}`)
+  return parts.length ? parts.join(' + ') : 'No payment recorded'
+}
+
+export default function ClientHistory({ clients = [], sales = [], receiptSettings = DEFAULT_RECEIPT_SETTINGS, onDeleteClient }) {
   const [search, setSearch] = useState('')
   const [selectedKey, setSelectedKey] = useState('')
   const [receiptSale, setReceiptSale] = useState(null)
+  const [deleteClientTarget, setDeleteClientTarget] = useState(null)
   const settings = { ...DEFAULT_RECEIPT_SETTINGS, ...receiptSettings }
 
   const clientRecords = useMemo(() => {
@@ -106,6 +128,19 @@ export default function ClientHistory({ clients = [], sales = [], receiptSetting
     window.print()
   }
 
+  function deleteSelectedClient() {
+    if (!selectedClient || !onDeleteClient) return
+    setDeleteClientTarget(selectedClient)
+  }
+
+  function confirmDeleteClient() {
+    if (!deleteClientTarget || !onDeleteClient) return
+    onDeleteClient(deleteClientTarget.name)
+    setDeleteClientTarget(null)
+    setSelectedKey('')
+    setReceiptSale(null)
+  }
+
   return (
     <div className="client-history-page">
       <section className="sales-report-header client-history-header">
@@ -165,6 +200,18 @@ export default function ClientHistory({ clients = [], sales = [], receiptSetting
                   <h4>{selectedClient.name}</h4>
                   <p>Last visit: {selectedClient.lastSale ? formatDate(selectedClient.lastSale.date) : 'No sales yet'}</p>
                 </div>
+                {onDeleteClient && (
+                  <button
+                    type="button"
+                    className="client-delete-button"
+                    onClick={deleteSelectedClient}
+                    title="Delete client"
+                    aria-label={`Delete ${selectedClient.name}`}
+                  >
+                    <i className="fi fi-rr-user-xmark" aria-hidden="true"></i>
+                    <span>Delete</span>
+                  </button>
+                )}
               </div>
 
               <div className="money-summary-grid client-history-summary">
@@ -200,7 +247,7 @@ export default function ClientHistory({ clients = [], sales = [], receiptSetting
                     <div className="client-sale-card-top">
                       <div>
                         <strong>{formatDate(sale.date)}</strong>
-                        <span>{sale.paymentMethod || 'Cash'}{sale.voided ? ` | Voided: ${sale.voidReason || 'Voided'}` : ''}</span>
+                        <span>{summarizeSalePayments(sale)}{sale.voided ? ` | Voided: ${sale.voidReason || 'Voided'}` : ''}</span>
                       </div>
                       <div className="client-sale-card-actions">
                         <b>{sale.voided ? `-${money(sale.total)}` : money(sale.total)}</b>
@@ -256,6 +303,26 @@ export default function ClientHistory({ clients = [], sales = [], receiptSetting
                 <strong>{receiptSale.clientName || 'Walk-in client'}</strong>
                 <span>Payment</span>
                 <strong>{receiptSale.paymentMethod || 'Cash'}</strong>
+                {getSalePayments(receiptSale).map(payment => (
+                  <Fragment key={`${payment.method}-${payment.amount}`}>
+                    <span>{payment.method} paid</span>
+                    <strong>{money(payment.amount)}</strong>
+                  </Fragment>
+                ))}
+                {Number(receiptSale.pendingBalance) > 0 && (
+                  <>
+                    <span>Pending balance</span>
+                    <strong>{money(receiptSale.pendingBalance)}</strong>
+                  </>
+                )}
+                {getSalePayments(receiptSale).some(payment => payment.method === 'Cash') && (
+                  <>
+                    <span>Cash received</span>
+                    <strong>{money(receiptSale.cashReceived || receiptSale.total)}</strong>
+                    <span>Change</span>
+                    <strong>{money(receiptSale.changeDue || 0)}</strong>
+                  </>
+                )}
               </div>
 
               <div className="receipt-items">
@@ -294,6 +361,37 @@ export default function ClientHistory({ clients = [], sales = [], receiptSetting
               </button>
               <button type="button" className="complete-sale-button" onClick={printReceipt}>
                 Print receipt
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteClientTarget && (
+        <div className="client-modal-backdrop">
+          <div className="client-modal delete-product-modal" role="dialog" aria-modal="true" aria-labelledby="delete-client-title">
+            <div className="delete-product-mark" aria-hidden="true">
+              <i className="fi fi-rr-user-xmark"></i>
+            </div>
+            <div>
+              <span className="eyebrow">Delete client</span>
+              <h3 id="delete-client-title">Remove this client name?</h3>
+              <p>
+                <strong>{deleteClientTarget.name}</strong> will be removed from saved clients and past purchases. Sales totals will stay.
+              </p>
+            </div>
+            <div className="delete-product-summary">
+              <span>Visits</span>
+              <strong>{deleteClientTarget.visitCount}</strong>
+              <span>Total spent</span>
+              <strong>{money(deleteClientTarget.totalSpent)}</strong>
+            </div>
+            <div className="client-modal-actions">
+              <button type="button" className="secondary-page-button" onClick={() => setDeleteClientTarget(null)}>
+                Cancel
+              </button>
+              <button type="button" className="confirm-delete-button" onClick={confirmDeleteClient}>
+                Delete client
               </button>
             </div>
           </div>

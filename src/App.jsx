@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import { initialProducts } from './data/initialProducts'
 import Dashboard from './components/Dashboard'
 import ProductTable from './components/ProductTable'
 import ProductModal from './components/ProductModal'
@@ -11,6 +10,12 @@ import POS from './components/POS'
 import SalesReport from './components/SalesReport'
 import ClientHistory from './components/ClientHistory'
 import Settings from './components/Settings'
+import { DEFAULT_CATEGORIES, DEFAULT_RECEIPT_SETTINGS, loadClinicRecords, loadClinicRecordsAsync, saveClinicRecordsAsync } from './utils/storage'
+import {
+  activateLicense,
+  getInstallationId,
+  verifySavedLicense,
+} from './utils/license'
 
 const tabs = [
   { id: 'pos', label: 'Checkout', short: 'POS', icon: 'fi-rr-shopping-cart' },
@@ -24,17 +29,6 @@ const tabs = [
 
 const PASSWORD_KEY = 'vet-app-password'
 const OWNER_PASSWORD_KEY = 'vet-owner-password'
-const RECEIPT_SETTINGS_KEY = 'vet-receipt-settings'
-const DEFAULT_RECEIPT_SETTINGS = {
-  clinicName: 'Vet POS',
-  address: '',
-  phone: '',
-  tin: '',
-  email: '',
-  footer: 'Thank you for your visit.',
-  paperWidth: '80',
-  logo: '',
-}
 
 function todayKey() {
   const date = new Date()
@@ -55,37 +49,38 @@ async function hashPassword(password, salt) {
   return Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, '0')).join('')
 }
 
+function licenseMessage(reason) {
+  if (!reason) return 'Invalid license.'
+  if (reason.includes('expired')) return 'License expired.'
+  if (reason.includes('Installation ID') || reason.includes('another installation')) {
+    return 'This license belongs to another installation.'
+  }
+  if (reason.includes('Device date moved backward')) return reason
+  if (reason.includes('missing')) return 'License is missing.'
+  return 'Invalid license.'
+}
+
 export default function App() {
-  const [products, setProducts] = useState(() => {
-    const saved = localStorage.getItem('vet-products')
-    return saved ? JSON.parse(saved) : initialProducts
-  })
-  const [sales, setSales] = useState(() => {
-    const saved = localStorage.getItem('vet-sales')
-    return saved ? JSON.parse(saved) : []
-  })
-  const [clients, setClients] = useState(() => {
-    const saved = localStorage.getItem('vet-clients')
-    return saved ? JSON.parse(saved) : []
-  })
-  const [expenses, setExpenses] = useState(() => {
-    const saved = localStorage.getItem('vet-expenses')
-    return saved ? JSON.parse(saved) : []
-  })
-  const [cashDrawer, setCashDrawer] = useState(() => {
-    const saved = localStorage.getItem('vet-cash-drawer')
-    return saved ? JSON.parse(saved) : {}
-  })
-  const [receiptSettings, setReceiptSettings] = useState(() => {
-    const saved = localStorage.getItem(RECEIPT_SETTINGS_KEY)
-    return saved ? { ...DEFAULT_RECEIPT_SETTINGS, ...JSON.parse(saved) } : DEFAULT_RECEIPT_SETTINGS
-  })
+  const [clinicRecordsLoaded] = useState(() => loadClinicRecords())
+  const [installationId, setInstallationId] = useState('')
+  const [licenseStatus, setLicenseStatus] = useState({ loading: true, valid: false, reason: '' })
+  const [products, setProducts] = useState(clinicRecordsLoaded.products)
+  const [sales, setSales] = useState(clinicRecordsLoaded.sales)
+  const [clients, setClients] = useState(clinicRecordsLoaded.clients)
+  const [expenses, setExpenses] = useState(clinicRecordsLoaded.expenses)
+  const [cashDrawer, setCashDrawer] = useState(clinicRecordsLoaded.cashDrawer)
+  const [categories, setCategories] = useState(clinicRecordsLoaded.categories)
+  const [receiptSettings, setReceiptSettings] = useState(clinicRecordsLoaded.receiptSettings)
   const [tab, setTab] = useState('pos')
   const [modalOpen, setModalOpen] = useState(false)
   const [editProduct, setEditProduct] = useState(null)
   const [productPreset, setProductPreset] = useState(null)
   const [restockProduct, setRestockProduct] = useState(null)
   const [undoProduct, setUndoProduct] = useState(null)
+  const [deleteProductTarget, setDeleteProductTarget] = useState(null)
+  const [deleteExpenseTarget, setDeleteExpenseTarget] = useState(null)
+  const [appNotice, setAppNotice] = useState(null)
+  const [storageReady, setStorageReady] = useState(false)
   const [navCollapsed, setNavCollapsed] = useState(false)
   const [openingCashPrompt, setOpeningCashPrompt] = useState('')
   const [orders, setOrders] = useState([])
@@ -106,36 +101,81 @@ export default function App() {
   const [ownerPassword, setOwnerPassword] = useState('')
   const [ownerSetupPassword, setOwnerSetupPassword] = useState('')
   const [ownerSetupConfirm, setOwnerSetupConfirm] = useState('')
+  const [licenseInput, setLicenseInput] = useState('')
+  const [licenseError, setLicenseError] = useState('')
+  const [licenseBusy, setLicenseBusy] = useState(false)
+  const [licenseCopied, setLicenseCopied] = useState(false)
   const [authError, setAuthError] = useState('')
   const [ownerAuthError, setOwnerAuthError] = useState('')
   const [authBusy, setAuthBusy] = useState(false)
   const [ownerAuthBusy, setOwnerAuthBusy] = useState(false)
   const currentDayKey = todayKey()
   const needsOpeningCash = tab === 'pos' && !cashDrawer[currentDayKey]
+  const isActivated = licenseStatus.valid
 
   useEffect(() => {
-    localStorage.setItem('vet-products', JSON.stringify(products))
-  }, [products])
+    let active = true
+
+    getInstallationId()
+      .then(id => {
+        if (active) setInstallationId(id)
+      })
+      .catch(() => {
+        if (active) setLicenseStatus({ loading: false, valid: false, reason: 'Could not prepare activation.' })
+      })
+
+    verifySavedLicense()
+      .then(result => {
+        if (!active) return
+        setLicenseStatus({
+          loading: false,
+          valid: result.valid,
+          reason: result.valid ? '' : licenseMessage(result.reason),
+        })
+      })
+      .catch(() => {
+        if (active) setLicenseStatus({ loading: false, valid: false, reason: 'Could not verify license.' })
+      })
+
+    loadClinicRecordsAsync()
+      .then(records => {
+        if (!active) return
+        setProducts(records.products)
+        setSales(records.sales)
+        setClients(records.clients)
+        setExpenses(records.expenses)
+        setCashDrawer(records.cashDrawer)
+        setCategories(records.categories)
+        setReceiptSettings(records.receiptSettings)
+      })
+      .catch(() => {
+        if (!active) return
+        setAppNotice({
+          title: 'Storage fallback active',
+          message: 'SQLite could not start, so Vet POS is using backup local storage for now.',
+          tone: 'warning',
+        })
+      })
+      .finally(() => {
+        if (active) setStorageReady(true)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [])
 
   useEffect(() => {
-    localStorage.setItem('vet-sales', JSON.stringify(sales))
-  }, [sales])
-
-  useEffect(() => {
-    localStorage.setItem('vet-clients', JSON.stringify(clients))
-  }, [clients])
-
-  useEffect(() => {
-    localStorage.setItem('vet-expenses', JSON.stringify(expenses))
-  }, [expenses])
-
-  useEffect(() => {
-    localStorage.setItem('vet-cash-drawer', JSON.stringify(cashDrawer))
-  }, [cashDrawer])
-
-  useEffect(() => {
-    localStorage.setItem(RECEIPT_SETTINGS_KEY, JSON.stringify(receiptSettings))
-  }, [receiptSettings])
+    if (!storageReady) return
+    saveClinicRecordsAsync({ products, sales, clients, expenses, cashDrawer, categories, receiptSettings })
+      .catch(() => {
+        setAppNotice({
+          title: 'Storage warning',
+          message: 'SQLite save failed. Backup local storage was still updated.',
+          tone: 'warning',
+        })
+      })
+  }, [products, sales, clients, expenses, cashDrawer, categories, receiptSettings, storageReady])
 
   useEffect(() => {
     if (!passwordRecord) return undefined
@@ -215,7 +255,29 @@ export default function App() {
     })
   }
 
-  function completeSale({ items, paymentMethod, discount, clientName }) {
+  function deleteClientName(name) {
+    const cleanName = name.trim()
+    if (!cleanName) return
+    const key = cleanName.toLowerCase()
+
+    setClients(prev => prev.filter(client => client.name?.trim().toLowerCase() !== key))
+    setSales(prev => prev.map(sale => (
+      sale.clientName?.trim().toLowerCase() === key
+        ? { ...sale, clientName: '' }
+        : sale
+    )))
+  }
+
+  function completeSale({
+    items,
+    paymentMethod,
+    payments = [],
+    pendingBalance = 0,
+    cashReceived = 0,
+    changeDue = 0,
+    discount,
+    clientName,
+  }) {
     const subtotal = items.reduce((sum, item) => {
       return sum + (Number(item.lineSubtotal) || Number(item.qty) * Number(item.price))
     }, 0)
@@ -231,6 +293,17 @@ export default function App() {
       items,
       clientName: clientName?.trim() || '',
       paymentMethod,
+      payments: Array.isArray(payments)
+        ? payments
+          .map(payment => ({
+            method: payment.method || 'Cash',
+            amount: Math.max(0, Number(payment.amount) || 0),
+          }))
+          .filter(payment => payment.amount > 0)
+        : [],
+      pendingBalance: Math.max(0, Number(pendingBalance) || 0),
+      cashReceived: Math.max(0, Number(cashReceived) || 0),
+      changeDue: Math.max(0, Number(changeDue) || 0),
       discount: normalizedDiscount,
       subtotal,
       total,
@@ -300,9 +373,14 @@ export default function App() {
   }
 
   function deleteExpense(id) {
-    if (confirm('Remove this expense from the sales report?')) {
-      setExpenses(prev => prev.filter(expense => expense.id !== id))
-    }
+    const expense = expenses.find(item => item.id === id)
+    if (expense) setDeleteExpenseTarget(expense)
+  }
+
+  function confirmDeleteExpense() {
+    if (!deleteExpenseTarget) return
+    setExpenses(prev => prev.filter(expense => expense.id !== deleteExpenseTarget.id))
+    setDeleteExpenseTarget(null)
   }
 
   function setOpeningCash(amount) {
@@ -333,12 +411,20 @@ export default function App() {
     event.preventDefault()
     const trimmed = openingCashPrompt.trim()
     if (trimmed === '') {
-      alert('Enter 0 if the money box is empty before starting POS.')
+      setAppNotice({
+        title: 'Opening cash needed',
+        message: 'Enter 0 if the money box is empty before starting POS.',
+        tone: 'warning',
+      })
       return
     }
     const amount = Number(trimmed)
     if (!Number.isFinite(amount) || amount < 0) {
-      alert('Enter a valid opening cash amount.')
+      setAppNotice({
+        title: 'Check opening cash',
+        message: 'Enter a valid opening cash amount. Use 0 if the box is empty.',
+        tone: 'warning',
+      })
       return
     }
     setOpeningCash(amount)
@@ -411,10 +497,44 @@ export default function App() {
     ))
   }
 
-  function deleteProduct(id) {
-    if (confirm('Remove this product from inventory?')) {
-      setProducts(prev => prev.filter(product => product.id !== id))
-    }
+  function requestDeleteProduct(product) {
+    setDeleteProductTarget(product)
+  }
+
+  function confirmDeleteProduct() {
+    if (!deleteProductTarget) return
+    setProducts(prev => prev.filter(product => product.id !== deleteProductTarget.id))
+    setDeleteProductTarget(null)
+  }
+
+  function addCategory(name) {
+    const cleanName = name.trim()
+    if (!cleanName) return false
+    const exists = categories.some(category => category.toLowerCase() === cleanName.toLowerCase())
+    if (exists) return false
+    setCategories(prev => [...prev, cleanName].sort())
+    return true
+  }
+
+  function renameCategory(oldName, nextName) {
+    const cleanOld = oldName.trim()
+    const cleanNext = nextName.trim()
+    if (!cleanOld || !cleanNext) return false
+    const duplicate = categories.some(category => (
+      category.toLowerCase() === cleanNext.toLowerCase()
+      && category.toLowerCase() !== cleanOld.toLowerCase()
+    ))
+    if (duplicate) return false
+
+    setCategories(prev => [...new Set(prev.map(category => (
+      category.toLowerCase() === cleanOld.toLowerCase() ? cleanNext : category
+    )))].sort())
+    setProducts(prev => prev.map(product => (
+      product.cat?.toLowerCase() === cleanOld.toLowerCase()
+        ? { ...product, cat: cleanNext }
+        : product
+    )))
+    return true
   }
 
   function openEdit(product) {
@@ -443,7 +563,7 @@ export default function App() {
   }
 
   function exportBackup() {
-    const data = JSON.stringify({ products, sales, clients, expenses, cashDrawer, receiptSettings }, null, 2)
+    const data = JSON.stringify({ products, sales, clients, expenses, cashDrawer, categories, receiptSettings }, null, 2)
     const blob = new Blob([data], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
@@ -463,27 +583,79 @@ export default function App() {
         const imported = JSON.parse(evt.target.result)
         if (Array.isArray(imported)) {
           setProducts(imported)
-          alert(`Successfully imported ${imported.length} products!`)
+          setCategories([...new Set([...DEFAULT_CATEGORIES, ...imported.map(product => product.cat).filter(Boolean)])].sort())
+          setAppNotice({ title: 'Backup imported', message: `Successfully imported ${imported.length} products.`, tone: 'success' })
         } else if (Array.isArray(imported.products)) {
           setProducts(imported.products)
           setSales(Array.isArray(imported.sales) ? imported.sales : [])
           setClients(Array.isArray(imported.clients) ? imported.clients : [])
           setExpenses(Array.isArray(imported.expenses) ? imported.expenses : [])
           setCashDrawer(imported.cashDrawer && typeof imported.cashDrawer === 'object' ? imported.cashDrawer : {})
+          setCategories([
+            ...new Set([
+              ...DEFAULT_CATEGORIES,
+              ...(Array.isArray(imported.categories) ? imported.categories : []),
+              ...imported.products.map(product => product.cat).filter(Boolean),
+            ]),
+          ].sort())
           setReceiptSettings(imported.receiptSettings && typeof imported.receiptSettings === 'object'
             ? { ...DEFAULT_RECEIPT_SETTINGS, ...imported.receiptSettings }
             : DEFAULT_RECEIPT_SETTINGS
           )
-          alert(`Successfully imported ${imported.products.length} products, ${Array.isArray(imported.sales) ? imported.sales.length : 0} sales, ${Array.isArray(imported.clients) ? imported.clients.length : 0} clients, ${Array.isArray(imported.expenses) ? imported.expenses.length : 0} expenses, and cash drawer records!`)
+          setAppNotice({
+            title: 'Backup imported',
+            message: `Imported ${imported.products.length} products, ${Array.isArray(imported.sales) ? imported.sales.length : 0} sales, ${Array.isArray(imported.clients) ? imported.clients.length : 0} clients, ${Array.isArray(imported.expenses) ? imported.expenses.length : 0} expenses, and cash drawer records.`,
+            tone: 'success',
+          })
         } else {
-          alert('Invalid file. Please use a valid backup JSON file.')
+          setAppNotice({ title: 'Invalid backup file', message: 'Please use a valid backup JSON file.', tone: 'warning' })
         }
       } catch {
-        alert('Could not read file. Make sure it is a valid JSON backup.')
+        setAppNotice({ title: 'Import failed', message: 'Could not read file. Make sure it is a valid JSON backup.', tone: 'warning' })
       }
     }
     reader.readAsText(file)
     event.target.value = ''
+  }
+
+  async function copyInstallationId() {
+    if (!installationId) return
+    try {
+      await navigator.clipboard.writeText(installationId)
+      setLicenseCopied(true)
+      setTimeout(() => setLicenseCopied(false), 1800)
+    } catch {
+      setLicenseError('Could not copy the installation ID. You can still type it manually.')
+    }
+  }
+
+  async function submitLicense(event) {
+    event.preventDefault()
+    const cleanLicense = licenseInput.trim()
+    if (!cleanLicense) {
+      setLicenseError('Paste the license code before activating.')
+      return
+    }
+
+    setLicenseBusy(true)
+    setLicenseError('')
+
+    try {
+      const result = await activateLicense(cleanLicense)
+      if (!result.valid) {
+        const message = licenseMessage(result.reason)
+        setLicenseError(message)
+        setLicenseStatus({ loading: false, valid: false, reason: message })
+        return
+      }
+
+      setLicenseStatus({ loading: false, valid: true, reason: '' })
+      setLicenseInput('')
+    } catch {
+      setLicenseError('Could not activate the app. Please check the license and try again.')
+    } finally {
+      setLicenseBusy(false)
+    }
   }
 
   async function submitPasswordSetup(event) {
@@ -669,6 +841,71 @@ export default function App() {
     )
   }
 
+  if (licenseStatus.loading) {
+    return (
+      <main className="app-lock-screen">
+        <div className="app-lock-card activation-card">
+          <div className="app-lock-brand">
+            <div className="brand-mark">SF</div>
+            <div>
+              <span className="eyebrow">App activation</span>
+              <h1>Checking license</h1>
+              <p>Please wait while StockFlow POS verifies this installation.</p>
+            </div>
+          </div>
+        </div>
+      </main>
+    )
+  }
+
+  if (!isActivated) {
+    return (
+      <main className="app-lock-screen">
+        <form className="app-lock-card activation-card" onSubmit={submitLicense}>
+          <div className="app-lock-brand">
+            <div className="brand-mark">SF</div>
+            <div>
+              <span className="eyebrow">App activation</span>
+              <h1>Activate this device</h1>
+              <p>Send this installation ID to the license issuer, then paste the signed license below.</p>
+            </div>
+          </div>
+
+          <div className="activation-code-box">
+            <span>Installation ID</span>
+            <strong>{installationId || 'Preparing...'}</strong>
+            <button type="button" className="secondary-page-button" onClick={copyInstallationId} disabled={!installationId}>
+              {licenseCopied ? 'Copied' : 'Copy ID'}
+            </button>
+          </div>
+
+          <label className="client-name-field">
+            <span>License code</span>
+            <input
+              value={licenseInput}
+              onChange={event => {
+                setLicenseError('')
+                setLicenseInput(event.target.value.trim())
+              }}
+              placeholder="Paste SFP1 license"
+              autoComplete="off"
+              required
+              autoFocus
+            />
+          </label>
+
+          {(licenseError || licenseStatus.reason) && (
+            <div className="app-lock-error">{licenseError || licenseStatus.reason}</div>
+          )}
+
+          <button type="submit" className="complete-sale-button" disabled={licenseBusy}>
+            {licenseBusy ? 'Checking license...' : 'Activate app'}
+          </button>
+        </form>
+      </main>
+    )
+  }
+
   if (!passwordRecord || !isUnlocked) {
     const isSetup = !passwordRecord
 
@@ -805,7 +1042,7 @@ export default function App() {
           <ProductTable
             products={products}
             onEdit={openEdit}
-            onDelete={deleteProduct}
+            onDelete={requestDeleteProduct}
             onRestock={product => setRestockProduct(product)}
             onUndo={product => setUndoProduct(product)}
           />
@@ -840,12 +1077,23 @@ export default function App() {
             onSetClosingCash={setClosingCash}
           />
         )}
-        {tab === 'clients' && <ClientHistory clients={clients} sales={sales} receiptSettings={receiptSettings} />}
+        {tab === 'clients' && (
+          <ClientHistory
+            clients={clients}
+            sales={sales}
+            receiptSettings={receiptSettings}
+            onDeleteClient={deleteClientName}
+          />
+        )}
         {tab === 'report' && <Report products={products} />}
         {tab === 'settings' && (
           <Settings
             receiptSettings={receiptSettings}
+            categories={categories}
+            products={products}
             onSaveReceiptSettings={setReceiptSettings}
+            onAddCategory={addCategory}
+            onRenameCategory={renameCategory}
             onExportBackup={exportBackup}
             onImportBackup={importBackup}
           />
@@ -857,6 +1105,7 @@ export default function App() {
           product={editProduct}
           preset={productPreset}
           products={products}
+          categories={categories}
           onSave={saveProduct}
           onClose={() => { setModalOpen(false); setEditProduct(null); setProductPreset(null) }}
         />
@@ -876,6 +1125,88 @@ export default function App() {
           onUndo={saveUndo}
           onClose={() => setUndoProduct(null)}
         />
+      )}
+
+      {deleteProductTarget && (
+        <div className="client-modal-backdrop">
+          <div className="client-modal delete-product-modal" role="dialog" aria-modal="true" aria-labelledby="delete-product-title">
+            <div className="delete-product-mark" aria-hidden="true">
+              <i className="fi fi-rr-trash"></i>
+            </div>
+            <div>
+              <span className="eyebrow">Delete product</span>
+              <h3 id="delete-product-title">Remove this item?</h3>
+              <p>
+                <strong>{deleteProductTarget.name}</strong> will be removed from inventory. This cannot be undone from the product list.
+              </p>
+            </div>
+
+            <div className="delete-product-summary">
+              <span>Category</span>
+              <strong>{deleteProductTarget.cat || 'Uncategorized'}</strong>
+              <span>Current stock</span>
+              <strong>{deleteProductTarget.trackStock === false ? 'Service' : `${deleteProductTarget.qty || 0}${deleteProductTarget.unit ? ` ${deleteProductTarget.unit}` : ''}`}</strong>
+            </div>
+
+            <div className="client-modal-actions">
+              <button type="button" className="secondary-page-button" onClick={() => setDeleteProductTarget(null)}>
+                Cancel
+              </button>
+              <button type="button" className="confirm-delete-button" onClick={confirmDeleteProduct}>
+                Delete product
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteExpenseTarget && (
+        <div className="client-modal-backdrop">
+          <div className="client-modal delete-product-modal" role="dialog" aria-modal="true" aria-labelledby="delete-expense-title">
+            <div className="delete-product-mark" aria-hidden="true">
+              <i className="fi fi-rr-receipt"></i>
+            </div>
+            <div>
+              <span className="eyebrow">Delete expense</span>
+              <h3 id="delete-expense-title">Remove this expense?</h3>
+              <p>This removes the expense from today&apos;s sales report.</p>
+            </div>
+
+            <div className="delete-product-summary">
+              <span>Category</span>
+              <strong>{deleteExpenseTarget.category || 'General'}</strong>
+              <span>Amount</span>
+              <strong>PHP {Number(deleteExpenseTarget.amount || 0).toFixed(2)}</strong>
+            </div>
+
+            <div className="client-modal-actions">
+              <button type="button" className="secondary-page-button" onClick={() => setDeleteExpenseTarget(null)}>
+                Cancel
+              </button>
+              <button type="button" className="confirm-delete-button" onClick={confirmDeleteExpense}>
+                Delete expense
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {appNotice && (
+        <div className="client-modal-backdrop">
+          <div className={`client-modal app-notice-modal ${appNotice.tone || ''}`} role="dialog" aria-modal="true" aria-labelledby="app-notice-title">
+            <div className="delete-product-mark" aria-hidden="true">
+              <i className={`fi ${appNotice.tone === 'success' ? 'fi-rr-check' : 'fi-rr-triangle-warning'}`}></i>
+            </div>
+            <div>
+              <span className="eyebrow">{appNotice.tone === 'success' ? 'Success' : 'Notice'}</span>
+              <h3 id="app-notice-title">{appNotice.title}</h3>
+              <p>{appNotice.message}</p>
+            </div>
+            <button type="button" className="complete-sale-button" onClick={() => setAppNotice(null)}>
+              OK
+            </button>
+          </div>
+        </div>
       )}
 
       {needsOpeningCash && (

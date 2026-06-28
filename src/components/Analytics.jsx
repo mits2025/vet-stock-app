@@ -191,6 +191,8 @@ function getRestockReliability(product, plannedLeadTimeDays, now) {
 export default function Analytics({ products, onApplyReorderLevels }) {
   const [range, setRange] = useState('12')
   const [copied, setCopied] = useState(false)
+  const [copyError, setCopyError] = useState('')
+  const [reorderConfirmOpen, setReorderConfirmOpen] = useState(false)
   const [activeAnalyticsTab, setActiveAnalyticsTab] = useState('overview')
 
   if (products.length === 0) {
@@ -623,25 +625,22 @@ export default function Analytics({ products, onApplyReorderLevels }) {
 
     copyPromise
       .then(() => {
+        setCopyError('')
         setCopied(true)
         setTimeout(() => setCopied(false), 2500)
       })
-      .catch(() => alert('Copy failed. Please try again.'))
+      .catch(() => setCopyError('Copy failed. Please try again.'))
   }
 
   function applyTrendReorderLevels() {
     if (!onApplyReorderLevels || reorderAutomationCandidates.length === 0) return
-    const preview = reorderAutomationCandidates
-      .slice(0, 6)
-      .map(product => `${product.name}: ${product.previousReorder} -> ${product.reorder}`)
-      .join('\n')
-    const extra = reorderAutomationCandidates.length > 6
-      ? `\n...and ${reorderAutomationCandidates.length - 6} more`
-      : ''
+    setReorderConfirmOpen(true)
+  }
 
-    if (confirm(`Apply trend-based reorder levels to ${reorderAutomationCandidates.length} products?\n\n${preview}${extra}`)) {
-      onApplyReorderLevels(reorderAutomationCandidates.map(({ id, reorder }) => ({ id, reorder })))
-    }
+  function confirmApplyTrendReorderLevels() {
+    if (!onApplyReorderLevels || reorderAutomationCandidates.length === 0) return
+    onApplyReorderLevels(reorderAutomationCandidates.map(({ id, reorder }) => ({ id, reorder })))
+    setReorderConfirmOpen(false)
   }
 
   return (
@@ -681,6 +680,14 @@ export default function Analytics({ products, onApplyReorderLevels }) {
           </button>
         </div>
       </div>
+
+      {copyError && (
+        <div className="modal-friendly-alert page-friendly-alert" role="alert">
+          <i className="fi fi-rr-triangle-warning" aria-hidden="true"></i>
+          <span>{copyError}</span>
+          <button type="button" onClick={() => setCopyError('')} aria-label="Dismiss warning">×</button>
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 2 }}>
         {ANALYTICS_TABS.map(tab => (
@@ -1167,6 +1174,43 @@ export default function Analytics({ products, onApplyReorderLevels }) {
           )) : (
             <div style={{ color: '#667789', fontSize: 13 }}>No near-term watch items. The current order list covers the important reorder decisions.</div>
           )}
+        </div>
+      )}
+
+      {reorderConfirmOpen && (
+        <div className="client-modal-backdrop">
+          <div className="client-modal delete-product-modal" role="dialog" aria-modal="true" aria-labelledby="smart-reorder-title">
+            <div className="delete-product-mark" aria-hidden="true">
+              <i className="fi fi-rr-chart-line-up"></i>
+            </div>
+            <div>
+              <span className="eyebrow">Smart reorder</span>
+              <h3 id="smart-reorder-title">Apply trend-based levels?</h3>
+              <p>This updates reorder levels for {reorderAutomationCandidates.length} products using recent usage trends.</p>
+            </div>
+            <div className="delete-product-summary analytics-confirm-list">
+              {reorderAutomationCandidates.slice(0, 6).map(product => (
+                <span key={product.id}>
+                  <strong>{product.name}</strong>
+                  <small>{product.previousReorder} to {product.reorder}</small>
+                </span>
+              ))}
+              {reorderAutomationCandidates.length > 6 && (
+                <span>
+                  <strong>{reorderAutomationCandidates.length - 6} more</strong>
+                  <small>Additional products will also be updated</small>
+                </span>
+              )}
+            </div>
+            <div className="client-modal-actions">
+              <button type="button" className="secondary-page-button" onClick={() => setReorderConfirmOpen(false)}>
+                Cancel
+              </button>
+              <button type="button" className="complete-sale-button" onClick={confirmApplyTrendReorderLevels}>
+                Apply levels
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

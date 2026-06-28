@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { Fragment, useCallback, useMemo, useState } from 'react'
 import { getUsageInLastDays } from '../utils/usage'
 
 const money = value => `PHP ${Number(value || 0).toFixed(2)}`
@@ -9,6 +9,7 @@ const consumesStock = product => product.trackStock === false && product.consume
 const OVERSTOCK_REORDER_MULTIPLE = 3
 const LOW_USAGE_WEEKLY_THRESHOLD = 1
 const PAYMENT_OPTIONS = ['Cash', 'GCash', 'Bank transfer', 'Card']
+const SHORT_PAYMENT_OPTIONS = ['GCash', 'Bank transfer', 'Card']
 const discountAmount = (lineSubtotal, value) => {
   const percent = Math.min(100, Math.max(0, Number(value) || 0))
   return lineSubtotal * (percent / 100)
@@ -26,6 +27,20 @@ const formatReceiptDate = dateValue => new Date(dateValue).toLocaleString('en-PH
   hour: 'numeric',
   minute: '2-digit',
 })
+const paymentClassName = method => `payment-${method.toLowerCase().replace(/\s+/g, '-')}`
+const getSalePayments = sale => {
+  if (Array.isArray(sale?.payments) && sale.payments.length > 0) {
+    return sale.payments
+      .map(payment => ({
+        method: payment.method || 'Cash',
+        amount: Math.max(0, Number(payment.amount) || 0),
+      }))
+      .filter(payment => payment.amount > 0)
+  }
+
+  const amount = Math.max(0, Number(sale?.total) || 0)
+  return amount > 0 ? [{ method: sale?.paymentMethod || 'Cash', amount }] : []
+}
 
 export default function POS({
   products,
@@ -44,17 +59,21 @@ export default function POS({
   const [activeCategory, setActiveCategory] = useState('All')
   const [checkoutOpen, setCheckoutOpen] = useState(false)
   const [paymentMethod, setPaymentMethod] = useState('Cash')
+  const [cashReceived, setCashReceived] = useState('')
+  const [shortPaymentMethod, setShortPaymentMethod] = useState('')
   const [clientModalOpen, setClientModalOpen] = useState(false)
   const [clientDraftName, setClientDraftName] = useState('')
   const [clientSuggestionsOpen, setClientSuggestionsOpen] = useState(false)
   const [receiptSale, setReceiptSale] = useState(null)
+  const [notice, setNotice] = useState('')
+  const [clearCartConfirmOpen, setClearCartConfirmOpen] = useState(false)
   const activeOrder = orders.find(order => order.id === activeOrderId) || orders[0]
   const cart = activeOrder?.cart || []
   const itemDiscounts = activeOrder?.itemDiscounts || {}
   const clientSuggestions = clients
     .filter(client => {
       const term = clientDraftName.trim().toLowerCase()
-      return !term || client.name.toLowerCase().includes(term)
+      return term && client.name.toLowerCase().includes(term)
     })
     .slice(0, 5)
 
@@ -117,6 +136,12 @@ export default function POS({
   }, 0)
   const total = Math.max(0, subtotal - discountTotal)
   const itemCount = cart.reduce((sum, item) => sum + item.qty, 0)
+  const cashReceivedAmount = Math.max(0, Number(cashReceived) || 0)
+  const isCashPayment = paymentMethod === 'Cash'
+  const cashChange = isCashPayment ? Math.max(0, cashReceivedAmount - total) : 0
+  const cashShort = isCashPayment ? Math.max(0, total - cashReceivedAmount) : 0
+  const hasShortPaymentChoice = Boolean(isCashPayment && cashShort > 0 && shortPaymentMethod)
+  const canConfirmPayment = !isCashPayment || cashReceivedAmount >= total || hasShortPaymentChoice
 
   function updateActiveOrder(updater) {
     setOrders(prev => prev.map(order => {
@@ -186,7 +211,7 @@ export default function POS({
 
     const price = Number(product.price) || 0
     if (price <= 0) {
-      alert('Add a sale price to this product before selling it.')
+      setNotice('Add a sale price to this product before selling it.')
       return
     }
 
@@ -235,11 +260,14 @@ export default function POS({
 
   function clearCart() {
     if (!activeOrder || cart.length === 0) return
-    if (confirm('Clear the current cart?')) {
-      setActiveCart([])
-      setActiveDiscounts({})
-      setCheckoutOpen(false)
-    }
+    setClearCartConfirmOpen(true)
+  }
+
+  function confirmClearCart() {
+    setActiveCart([])
+    setActiveDiscounts({})
+    setCheckoutOpen(false)
+    setClearCartConfirmOpen(false)
   }
 
   function openCheckout() {
@@ -249,9 +277,11 @@ export default function POS({
     }
 
     if (cart.length === 0) {
-      alert('Add at least one product to the cart.')
+      setNotice('Add at least one product to the cart before checkout.')
       return
     }
+    setCashReceived(total.toFixed(2))
+    setShortPaymentMethod('')
     setCheckoutOpen(true)
   }
 
@@ -261,8 +291,13 @@ export default function POS({
 
   function checkoutOrder() {
     if (cart.length === 0) {
-      alert('Add at least one product to the cart.')
+      setNotice('Add at least one product to the cart before confirming payment.')
       setCheckoutOpen(false)
+      return
+    }
+
+    if (isCashPayment && cashShort > 0 && !shortPaymentMethod) {
+      setNotice(`Cash is short by ${money(cashShort)}. Choose how the remaining balance will be paid.`)
       return
     }
 
@@ -287,9 +322,25 @@ export default function POS({
       }
     })
 
+    const paidCash = isCashPayment ? Math.min(cashReceivedAmount, total) : 0
+    const pendingBalance = 0
+    const payments = isCashPayment
+      ? [
+        ...(paidCash > 0 ? [{ method: 'Cash', amount: paidCash }] : []),
+        ...(cashShort > 0
+          ? [{ method: shortPaymentMethod, amount: cashShort }]
+          : []),
+      ]
+      : [{ method: paymentMethod, amount: total }]
+    const salePaymentMethod = payments.length > 1 ? 'Mixed payment' : payments[0]?.method || paymentMethod
+
     const completedSale = onCompleteSale({
       items: receiptItems,
-      paymentMethod,
+      paymentMethod: salePaymentMethod,
+      payments,
+      pendingBalance,
+      cashReceived: isCashPayment ? cashReceivedAmount : 0,
+      changeDue: isCashPayment ? cashChange : 0,
       discount: discountTotal,
       clientName: activeOrder?.clientName?.trim() || '',
     })
@@ -297,6 +348,8 @@ export default function POS({
     if (activeOrder) removeOrderPage(activeOrder.id)
     setCheckoutOpen(false)
     setPaymentMethod('Cash')
+    setCashReceived('')
+    setShortPaymentMethod('')
   }
 
   function printReceipt() {
@@ -335,9 +388,8 @@ export default function POS({
         <section className="checkout-main">
           <div className="checkout-page-header">
             <div>
-              <span className="eyebrow">Payment step</span>
               <h3>Checkout</h3>
-              <p>Review the order, apply item discounts, then choose the buyer payment mode.</p>
+              <p>{itemCount} items for {activeOrder?.clientName || activeOrder?.label || 'Client'}</p>
             </div>
             <button
               onClick={() => setCheckoutOpen(false)}
@@ -348,6 +400,13 @@ export default function POS({
               <i className="fi fi-rr-arrow-left" aria-hidden="true"></i>
             </button>
           </div>
+
+          {notice && (
+            <div className="modal-friendly-alert pos-friendly-alert" role="alert">
+              <i className="fi fi-rr-triangle-warning" aria-hidden="true"></i>
+              <span>{notice}</span>
+            </div>
+          )}
 
           <div className="checkout-item-list">
             {cart.map(item => {
@@ -385,8 +444,8 @@ export default function POS({
 
         <aside className="checkout-payment-panel">
           <div>
-            <span className="eyebrow">Buyer payment</span>
-            <h3>Total due</h3>
+            <span className="eyebrow">Payment</span>
+            <h3>{money(total)}</h3>
           </div>
 
           <div className="payment-mode-buttons" aria-label="Payment mode">
@@ -394,10 +453,15 @@ export default function POS({
               <button
                 key={option}
                 type="button"
-                onClick={() => setPaymentMethod(option)}
+                onClick={() => {
+                  setNotice('')
+                  setPaymentMethod(option)
+                  setShortPaymentMethod('')
+                  setCashReceived(option === 'Cash' ? total.toFixed(2) : '')
+                }}
                 className={[
                   'payment-mode-button',
-                  `payment-${option.toLowerCase().replace(/\s+/g, '-')}`,
+                  paymentClassName(option),
                   paymentMethod === option ? 'active' : '',
                 ].filter(Boolean).join(' ')}
                 aria-pressed={paymentMethod === option}
@@ -407,13 +471,62 @@ export default function POS({
             ))}
           </div>
 
+          {isCashPayment && (
+            <div className="cash-change-box">
+              <label>
+                Cash received
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={cashReceived}
+                  onChange={event => {
+                  setNotice('')
+                  setCashReceived(event.target.value)
+                  setShortPaymentMethod('')
+                }}
+                  placeholder="0.00"
+                />
+              </label>
+              <div className={cashShort > 0 ? 'cash-change-preview short' : 'cash-change-preview'}>
+                <span>{cashShort > 0 ? 'Short' : 'Change'}</span>
+                <strong>{cashShort > 0 ? money(cashShort) : money(cashChange)}</strong>
+              </div>
+              {cashShort > 0 && (
+                <div className="short-payment-options">
+                  <span>Remaining {money(cashShort)}</span>
+                  <div>
+                    {SHORT_PAYMENT_OPTIONS.map(option => (
+                      <button
+                        key={option}
+                        type="button"
+                        onClick={() => {
+                          setNotice('')
+                          setShortPaymentMethod(option)
+                        }}
+                        className={[
+                          'short-payment-button',
+                          paymentClassName(option),
+                          shortPaymentMethod === option ? 'active' : '',
+                        ].filter(Boolean).join(' ')}
+                        aria-pressed={shortPaymentMethod === option}
+                      >
+                        {option}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="totals-panel">
             <div><span>Subtotal</span><strong>{money(subtotal)}</strong></div>
             <div><span>Item discounts</span><strong>-{money(discountTotal)}</strong></div>
             <div className="grand-total"><span>Total</span><strong>{money(total)}</strong></div>
           </div>
 
-          <button onClick={checkoutOrder} className="complete-sale-button">
+          <button onClick={checkoutOrder} className="complete-sale-button" disabled={!canConfirmPayment}>
             Confirm payment
           </button>
         </aside>
@@ -423,6 +536,14 @@ export default function POS({
 
   return (
     <>
+      {notice && (
+        <div className="modal-friendly-alert pos-friendly-alert" role="alert">
+          <i className="fi fi-rr-triangle-warning" aria-hidden="true"></i>
+          <span>{notice}</span>
+          <button type="button" onClick={() => setNotice('')} aria-label="Dismiss warning">×</button>
+        </div>
+      )}
+
       <div className="order-page-strip" aria-label="Client order pages">
         {orders.map(order => {
           const orderCount = order.cart.reduce((sum, item) => sum + item.qty, 0)
@@ -654,12 +775,13 @@ export default function POS({
                 <span>Client name <small>(optional)</small></span>
                 <input
                   value={clientDraftName}
-                  onFocus={() => setClientSuggestionsOpen(true)}
-                  onClick={() => setClientSuggestionsOpen(true)}
+                  onFocus={() => setClientSuggestionsOpen(Boolean(clientDraftName.trim()))}
+                  onClick={() => setClientSuggestionsOpen(Boolean(clientDraftName.trim()))}
                   onBlur={() => setTimeout(() => setClientSuggestionsOpen(false), 120)}
                   onChange={event => {
-                    setClientDraftName(event.target.value)
-                    setClientSuggestionsOpen(true)
+                    const value = event.target.value
+                    setClientDraftName(value)
+                    setClientSuggestionsOpen(Boolean(value.trim()))
                   }}
                   onKeyDown={event => {
                     if (event.key === 'Enter') addOrderPage()
@@ -734,6 +856,26 @@ export default function POS({
                 <strong>{receiptSale.clientName || 'Walk-in client'}</strong>
                 <span>Payment</span>
                 <strong>{receiptSale.paymentMethod || 'Cash'}</strong>
+                {getSalePayments(receiptSale).map(payment => (
+                  <Fragment key={`${payment.method}-${payment.amount}`}>
+                    <span>{payment.method} paid</span>
+                    <strong>{money(payment.amount)}</strong>
+                  </Fragment>
+                ))}
+                {Number(receiptSale.pendingBalance) > 0 && (
+                  <>
+                    <span>Pending balance</span>
+                    <strong>{money(receiptSale.pendingBalance)}</strong>
+                  </>
+                )}
+                {getSalePayments(receiptSale).some(payment => payment.method === 'Cash') && (
+                  <>
+                    <span>Cash received</span>
+                    <strong>{money(receiptSale.cashReceived || receiptSale.total)}</strong>
+                    <span>Change</span>
+                    <strong>{money(receiptSale.changeDue || 0)}</strong>
+                  </>
+                )}
               </div>
 
               <div className="receipt-items">
@@ -766,6 +908,29 @@ export default function POS({
               </button>
               <button type="button" className="complete-sale-button" onClick={printReceipt}>
                 Print receipt
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {clearCartConfirmOpen && (
+        <div className="client-modal-backdrop">
+          <div className="client-modal delete-product-modal" role="dialog" aria-modal="true" aria-labelledby="clear-cart-title">
+            <div className="delete-product-mark" aria-hidden="true">
+              <i className="fi fi-rr-shopping-cart"></i>
+            </div>
+            <div>
+              <span className="eyebrow">Clear order</span>
+              <h3 id="clear-cart-title">Remove all items?</h3>
+              <p>This clears the current order summary for <strong>{activeOrder?.clientName || activeOrder?.label || 'this client'}</strong>.</p>
+            </div>
+            <div className="client-modal-actions">
+              <button type="button" className="secondary-page-button" onClick={() => setClearCartConfirmOpen(false)}>
+                Cancel
+              </button>
+              <button type="button" className="confirm-delete-button" onClick={confirmClearCart}>
+                Clear order
               </button>
             </div>
           </div>

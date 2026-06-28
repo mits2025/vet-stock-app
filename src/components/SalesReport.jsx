@@ -39,6 +39,44 @@ function getPaymentGroup(method) {
   return E_CASH_METHODS.includes(method) ? 'E-cash' : 'Cash'
 }
 
+function getSalePayments(sale) {
+  if (Array.isArray(sale.payments) && sale.payments.length > 0) {
+    return sale.payments
+      .map(payment => ({
+        method: payment.method || 'Cash',
+        amount: Math.max(0, Number(payment.amount) || 0),
+      }))
+      .filter(payment => payment.amount > 0)
+  }
+
+  const amount = Math.max(0, Number(sale.total) || 0)
+  return amount > 0 ? [{ method: sale.paymentMethod || 'Cash', amount }] : []
+}
+
+function summarizeSalePayments(sale) {
+  const parts = getSalePayments(sale).map(payment => `${payment.method} ${money(payment.amount)}`)
+  const pendingBalance = Math.max(0, Number(sale.pendingBalance) || 0)
+  if (pendingBalance > 0) parts.push(`Pending ${money(pendingBalance)}`)
+  return parts.length ? parts.join(' + ') : 'No payment recorded'
+}
+
+function buildSalesByMethod(periodSales) {
+  return periodSales.reduce((totals, sale) => {
+    getSalePayments(sale).forEach(payment => {
+      totals[payment.method] = (totals[payment.method] || 0) + payment.amount
+    })
+    return totals
+  }, {})
+}
+
+function getPaidByGroup(periodSales, group) {
+  return periodSales.reduce((sum, sale) => {
+    return sum + getSalePayments(sale)
+      .filter(payment => getPaymentGroup(payment.method) === group)
+      .reduce((paymentSum, payment) => paymentSum + payment.amount, 0)
+  }, 0)
+}
+
 function formatDate(dateValue) {
   if (!dateValue) return 'No date'
   const date = new Date(dateValue)
@@ -87,6 +125,7 @@ export default function SalesReport({
   const [ownerPeriod, setOwnerPeriod] = useState('month')
   const [openingCashDraft, setOpeningCashDraft] = useState(String(openingCash || ''))
   const [closingCashDraft, setClosingCashDraft] = useState(hasClosingCash ? String(closingCash) : '')
+  const [warning, setWarning] = useState('')
 
   const report = useMemo(() => {
     const todaySales = sales.filter(sale => isToday(sale.date))
@@ -94,11 +133,7 @@ export default function SalesReport({
     const voidedSales = todaySales.filter(sale => sale.voided)
     const periodExpenses = expenses.filter(expense => isToday(expense.date || expense.createdAt))
 
-    const salesByMethod = periodSales.reduce((totals, sale) => {
-      const method = sale.paymentMethod || 'Cash'
-      totals[method] = (totals[method] || 0) + (Number(sale.total) || 0)
-      return totals
-    }, {})
+    const salesByMethod = buildSalesByMethod(periodSales)
 
     const expensesByMethod = periodExpenses.reduce((totals, expense) => {
       const group = getPaymentGroup(expense.paymentMethod)
@@ -108,12 +143,10 @@ export default function SalesReport({
 
     const grossSales = periodSales.reduce((sum, sale) => sum + (Number(sale.total) || 0), 0)
     const totalExpenses = periodExpenses.reduce((sum, expense) => sum + (Number(expense.amount) || 0), 0)
-    const cashSales = periodSales
-      .filter(sale => getPaymentGroup(sale.paymentMethod) === 'Cash')
-      .reduce((sum, sale) => sum + (Number(sale.total) || 0), 0)
-    const eCashSales = periodSales
-      .filter(sale => getPaymentGroup(sale.paymentMethod) === 'E-cash')
-      .reduce((sum, sale) => sum + (Number(sale.total) || 0), 0)
+    const cashSales = getPaidByGroup(periodSales, 'Cash')
+    const eCashSales = getPaidByGroup(periodSales, 'E-cash')
+    const paidSales = cashSales + eCashSales
+    const pendingBalance = periodSales.reduce((sum, sale) => sum + (Number(sale.pendingBalance) || 0), 0)
 
     return {
       sales: periodSales,
@@ -124,9 +157,11 @@ export default function SalesReport({
       totalExpenses,
       cashSales,
       eCashSales,
+      paidSales,
+      pendingBalance,
       cashExpenses: expensesByMethod.Cash || 0,
       eCashExpenses: expensesByMethod['E-cash'] || 0,
-      netTotal: grossSales - totalExpenses,
+      netTotal: paidSales - totalExpenses,
       netCash: cashSales - (expensesByMethod.Cash || 0),
       expectedCash: openingCash + cashSales - (expensesByMethod.Cash || 0),
       cashVariance: hasClosingCash ? closingCash - (openingCash + cashSales - (expensesByMethod.Cash || 0)) : null,
@@ -139,11 +174,7 @@ export default function SalesReport({
     const voidedSales = sales.filter(sale => sale.voided && isInOwnerPeriod(sale.date, ownerPeriod))
     const periodExpenses = expenses.filter(expense => isInOwnerPeriod(expense.date || expense.createdAt, ownerPeriod))
 
-    const salesByMethod = periodSales.reduce((totals, sale) => {
-      const method = sale.paymentMethod || 'Cash'
-      totals[method] = (totals[method] || 0) + (Number(sale.total) || 0)
-      return totals
-    }, {})
+    const salesByMethod = buildSalesByMethod(periodSales)
 
     const expensesByCategory = periodExpenses.reduce((totals, expense) => {
       const category = expense.category || 'General'
@@ -165,6 +196,8 @@ export default function SalesReport({
 
     const grossSales = periodSales.reduce((sum, sale) => sum + (Number(sale.total) || 0), 0)
     const totalExpenses = periodExpenses.reduce((sum, expense) => sum + (Number(expense.amount) || 0), 0)
+    const pendingBalance = periodSales.reduce((sum, sale) => sum + (Number(sale.pendingBalance) || 0), 0)
+    const paidSales = getPaidByGroup(periodSales, 'Cash') + getPaidByGroup(periodSales, 'E-cash')
     const averageSale = periodSales.length ? grossSales / periodSales.length : 0
 
     return {
@@ -178,7 +211,9 @@ export default function SalesReport({
         .slice(0, 6),
       grossSales,
       totalExpenses,
-      netRevenue: grossSales - totalExpenses,
+      paidSales,
+      pendingBalance,
+      netRevenue: paidSales - totalExpenses,
       averageSale,
     }
   }, [sales, expenses, ownerPeriod])
@@ -187,7 +222,7 @@ export default function SalesReport({
     event.preventDefault()
     const amount = Number(expenseDraft.amount)
     if (!amount || amount <= 0) {
-      alert('Enter a valid expense amount.')
+      setWarning('Enter a valid expense amount before adding it.')
       return
     }
 
@@ -205,7 +240,7 @@ export default function SalesReport({
     event.preventDefault()
     const amount = Number(openingCashDraft)
     if (!Number.isFinite(amount) || amount < 0) {
-      alert('Enter a valid opening cash amount.')
+      setWarning('Enter a valid opening cash amount. Use 0 if the box is empty.')
       return
     }
     if (onSetOpeningCash) onSetOpeningCash(amount)
@@ -216,7 +251,7 @@ export default function SalesReport({
     event.preventDefault()
     const amount = Number(closingCashDraft)
     if (!Number.isFinite(amount) || amount < 0) {
-      alert('Enter a valid counted cash amount.')
+      setWarning('Enter a valid counted cash amount before closing the shift.')
       return
     }
     if (onSetClosingCash) onSetClosingCash(amount)
@@ -266,6 +301,14 @@ export default function SalesReport({
           })}
         </div>
       </section>
+
+      {warning && (
+        <div className="modal-friendly-alert page-friendly-alert" role="alert">
+          <i className="fi fi-rr-triangle-warning" aria-hidden="true"></i>
+          <span>{warning}</span>
+          <button type="button" onClick={() => setWarning('')} aria-label="Dismiss warning">×</button>
+        </div>
+      )}
 
       <section className="opening-cash-panel">
         <div>
@@ -331,7 +374,7 @@ export default function SalesReport({
         <div className="money-card primary">
           <span>Gross sales</span>
           <strong>{money(report.grossSales)}</strong>
-          <small>{report.sales.length} completed sales</small>
+          <small>{report.pendingBalance > 0 ? `${money(report.pendingBalance)} pending` : `${report.sales.length} completed sales`}</small>
         </div>
         <div className="money-card cash">
           <span>Expected cash box</span>
@@ -346,7 +389,7 @@ export default function SalesReport({
         <div className={hasClosingCash ? `money-card variance ${varianceClass(report.cashVariance)}` : report.netTotal < 0 ? 'money-card net negative' : 'money-card net'}>
           <span>{hasClosingCash ? 'Cash variance' : 'Net after expenses'}</span>
           <strong>{hasClosingCash ? signedMoney(report.cashVariance) : money(report.netTotal)}</strong>
-          <small>{hasClosingCash ? `${money(closingCash)} counted cash` : `${money(report.totalExpenses)} total expenses`}</small>
+          <small>{hasClosingCash ? `${money(closingCash)} counted cash` : `${money(report.paidSales)} collected - ${money(report.totalExpenses)} expenses`}</small>
         </div>
       </section>
 
@@ -381,7 +424,7 @@ export default function SalesReport({
               <div key={sale.id} className="report-row">
                 <div>
                   <strong>{sale.clientName || 'Walk-in client'}</strong>
-                  <span>{formatDate(sale.date)} | {sale.paymentMethod || 'Cash'} | {sale.items?.length || 0} items</span>
+                  <span>{formatDate(sale.date)} | {summarizeSalePayments(sale)} | {sale.items?.length || 0} items</span>
                 </div>
                 <b>{money(sale.total)}</b>
                 <button type="button" className="void-sale-button" onClick={() => openVoidModal(sale)}>
@@ -428,7 +471,7 @@ export default function SalesReport({
                 min="0"
                 step="0.01"
                 value={expenseDraft.amount}
-                onChange={event => setExpenseDraft(prev => ({ ...prev, amount: event.target.value }))}
+              onChange={event => setExpenseDraft(prev => ({ ...prev, amount: event.target.value }))}
                 placeholder="0.00"
               />
             </label>
@@ -436,7 +479,7 @@ export default function SalesReport({
               Paid from
               <select
                 value={expenseDraft.paymentMethod}
-                onChange={event => setExpenseDraft(prev => ({ ...prev, paymentMethod: event.target.value }))}
+              onChange={event => setExpenseDraft(prev => ({ ...prev, paymentMethod: event.target.value }))}
               >
                 <option>Cash</option>
                 <option>E-cash</option>
@@ -521,7 +564,7 @@ export default function SalesReport({
               <div className="money-card primary">
                 <span>Gross sales</span>
                 <strong>{money(ownerReport.grossSales)}</strong>
-                <small>{ownerReport.sales.length} completed sales</small>
+                <small>{ownerReport.pendingBalance > 0 ? `${money(ownerReport.pendingBalance)} pending` : `${ownerReport.sales.length} completed sales`}</small>
               </div>
               <div className="money-card negative">
                 <span>Expenses</span>
@@ -529,9 +572,9 @@ export default function SalesReport({
                 <small>{ownerReport.expenses.length} recorded costs</small>
               </div>
               <div className={ownerReport.netRevenue < 0 ? 'money-card net negative' : 'money-card net'}>
-                <span>Net revenue</span>
+                <span>Net collected</span>
                 <strong>{money(ownerReport.netRevenue)}</strong>
-                <small>Gross sales minus expenses</small>
+                <small>{money(ownerReport.paidSales)} collected minus expenses</small>
               </div>
               <div className="money-card cash">
                 <span>Average sale</span>
@@ -613,7 +656,7 @@ export default function SalesReport({
                     ...ownerReport.sales.slice(0, 4).map(sale => ({
                       id: `sale-${sale.id}`,
                       title: sale.clientName || 'Walk-in client',
-                      detail: `${formatDate(sale.date)} | ${sale.paymentMethod || 'Cash'}`,
+                      detail: `${formatDate(sale.date)} | ${summarizeSalePayments(sale)}`,
                       amount: money(sale.total),
                       type: 'sale',
                     })),
@@ -652,7 +695,7 @@ export default function SalesReport({
             <div className="void-sale-summary">
               <span>{voidDraft.sale.clientName || 'Walk-in client'}</span>
               <strong>{money(voidDraft.sale.total)}</strong>
-              <small>{formatDate(voidDraft.sale.date)} | {voidDraft.sale.paymentMethod || 'Cash'}</small>
+              <small>{formatDate(voidDraft.sale.date)} | {summarizeSalePayments(voidDraft.sale)}</small>
             </div>
 
             <label className="client-name-field">

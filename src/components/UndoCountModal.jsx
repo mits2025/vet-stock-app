@@ -24,12 +24,6 @@ export default function UndoCountModal({ product, onUndo, onClose }) {
   function handleUndo() {
     if (!last) return
 
-    const detail = isRestock
-      ? `Remove the +${last.added} ${product.unit} restock and restore quantity to ${restoredQty} ${product.unit}?`
-      : `Remove the last stock count and restore quantity to ${restoredQty} ${product.unit}?`
-
-    if (!confirm(`Undo the latest ${actionName}?\n\n${detail}`)) return
-
     if (isRestock) {
       onUndo({
         ...product,

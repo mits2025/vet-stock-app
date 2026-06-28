@@ -20,6 +20,7 @@ function statusLabel(status) {
 
 export default function Report({ products }) {
   const [copied, setCopied] = useState(false)
+  const [copyError, setCopyError] = useState('')
   const [selectedRestockMonth, setSelectedRestockMonth] = useState('')
   const generatedAt = new Date()
   const dateStr = generatedAt.toLocaleDateString('en-PH', {
@@ -202,10 +203,11 @@ export default function Report({ products }) {
   function copy() {
     navigator.clipboard.writeText(reportText)
       .then(() => {
+        setCopyError('')
         setCopied(true)
         setTimeout(() => setCopied(false), 2500)
       })
-      .catch(() => alert('Copy failed. Please select the report text and copy manually.'))
+      .catch(() => setCopyError('Copy failed. Please select the report text and copy manually.'))
   }
 
   if (products.length === 0) {
@@ -229,6 +231,14 @@ export default function Report({ products }) {
           {copied ? 'Copied' : 'Copy report'}
         </button>
       </section>
+
+      {copyError && (
+        <div className="modal-friendly-alert page-friendly-alert" role="alert">
+          <i className="fi fi-rr-triangle-warning" aria-hidden="true"></i>
+          <span>{copyError}</span>
+          <button type="button" onClick={() => setCopyError('')} aria-label="Dismiss warning">×</button>
+        </div>
+      )}
 
       <section className="report-kpi-grid">
         <div className="inventory-summary-card">

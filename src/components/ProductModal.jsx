@@ -1,31 +1,120 @@
 import { useState } from 'react'
 import { getUsageInLastDaysWithPendingCount } from '../utils/usage'
 
-const DEFAULT_CATS = ['Medicine', 'Vaccine', 'Test Kits', 'Supplies', 'Food', 'Equipment', 'Service']
+function ModalDropdown({ value, options, placeholder, onChange }) {
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState(() => options.find(option => option.value === value)?.label || '')
+  const normalizedQuery = query.trim().toLowerCase()
+  const filteredOptions = options.filter(option => {
+    if (!normalizedQuery) return true
+    return `${option.label} ${option.meta || ''}`.toLowerCase().includes(normalizedQuery)
+  })
 
-export default function ProductModal({ product, preset = null, products = [], onSave, onClose }) {
+  function chooseOption(option) {
+    onChange(option.value)
+    setQuery(option.label)
+    setOpen(false)
+  }
+
+  return (
+    <div className="product-modal-dropdown" onBlur={() => setOpen(false)}>
+      <div
+        className={open ? 'product-modal-dropdown-trigger open' : 'product-modal-dropdown-trigger'}
+      >
+        <input
+          value={query}
+          placeholder={placeholder}
+          onFocus={() => setOpen(true)}
+          onClick={() => setOpen(true)}
+          onChange={event => {
+            const nextQuery = event.target.value
+            setQuery(nextQuery)
+            setOpen(true)
+          }}
+          onKeyDown={event => {
+            if (event.key === 'Escape') {
+              setOpen(false)
+              setQuery('')
+            }
+            if (event.key === 'Enter') {
+              event.preventDefault()
+              if (filteredOptions[0]) {
+                chooseOption(filteredOptions[0])
+              }
+            }
+          }}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+        />
+        <i className="fi fi-rr-angle-small-down" aria-hidden="true"></i>
+      </div>
+      {open && (
+        <div className="product-modal-dropdown-menu" role="listbox">
+          {filteredOptions.map(option => (
+            <button
+              key={option.value}
+              type="button"
+              className={option.value === value ? 'selected' : ''}
+              onMouseDown={event => event.preventDefault()}
+              onClick={() => chooseOption(option)}
+              role="option"
+              aria-selected={option.value === value}
+            >
+              <span>{option.label}</span>
+              {option.meta && <small>{option.meta}</small>}
+            </button>
+          ))}
+          {filteredOptions.length === 0 && (
+            <div className="product-modal-dropdown-empty">No matching item.</div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export default function ProductModal({ product, preset = null, products = [], categories = [], onSave, onClose }) {
   const isEdit = !!product
   const savedCats = products.map(item => item.cat).filter(Boolean)
-  const cats = [...new Set([...DEFAULT_CATS, ...savedCats])].sort()
-  const initialCat = isEdit ? product.cat : cats[0] || 'Medicine'
+  const cats = [...new Set([...categories, ...savedCats])].sort()
+  const initialCat = isEdit ? product.cat : preset?.cat || ''
 
   const [form, setForm] = useState(
     isEdit
       ? { trackStock: product.trackStock !== false, ...product, newQty: product.qty }
-      : { name: '', cat: initialCat, customCat: '', qty: '', unit: '', reorder: '', price: '', newQty: '', trackStock: true, ...preset }
+      : { name: '', cat: initialCat, qty: '', unit: '', reorder: '', price: '', newQty: '', trackStock: true, ...preset }
   )
+  const [warning, setWarning] = useState('')
 
-  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+  const set = (k, v) => {
+    setWarning('')
+    setForm(f => ({ ...f, [k]: v }))
+  }
 
   const usedThisWeek = isEdit
     ? getUsageInLastDaysWithPendingCount(form, form.newQty)
     : 0
   const stockProducts = products.filter(item => item.trackStock !== false && item.id !== product?.id)
+  const categoryOptions = cats.map(cat => ({ value: cat, label: cat }))
+  const stockProductOptions = [
+    { value: '', label: 'No stock deduction', meta: 'Service does not consume inventory' },
+    ...stockProducts.map(item => ({
+      value: String(item.id),
+      label: item.name,
+      meta: `${item.qty} ${item.unit || 'units'} available`,
+    })),
+  ]
 
   function handleSave() {
-    if (!form.name.trim()) return alert('Please enter a product name.')
-    const category = form.cat === '__custom__' ? form.customCat.trim() : form.cat
-    if (!category) return alert('Please enter a category.')
+    if (!form.name.trim()) {
+      setWarning('Product name is required before saving.')
+      return
+    }
+    const category = form.cat
+    if (!category) {
+      setWarning('Choose a category before saving. You can add or rename categories in Settings.')
+      return
+    }
     const trackStock = form.trackStock !== false
 
     const oldQty     = Number(form.qty) || 0
@@ -52,7 +141,6 @@ export default function ProductModal({ product, preset = null, products = [], on
     onSave({
       ...form,
       cat:          category,
-      customCat:    undefined,
       trackStock,
       unit:         form.unit.trim(),
       qty:          newQty,
@@ -89,6 +177,13 @@ export default function ProductModal({ product, preset = null, products = [], on
           {isEdit ? '📋 Update stock count' : '➕ Add new product'}
         </h2>
 
+        {warning && (
+          <div className="modal-friendly-alert" role="alert">
+            <i className="fi fi-rr-triangle-warning" aria-hidden="true"></i>
+            <span>{warning}</span>
+          </div>
+        )}
+
         {/* Product name */}
         <div style={{ marginBottom: 12 }}>
           <label style={{ display: 'block', fontSize: 12, color: '#666', marginBottom: 4 }}>Product name</label>
@@ -103,18 +198,12 @@ export default function ProductModal({ product, preset = null, products = [], on
         {/* Category */}
         <div style={{ marginBottom: 12 }}>
           <label style={{ display: 'block', fontSize: 12, color: '#666', marginBottom: 4 }}>Category</label>
-          <select value={form.cat} onChange={e => set('cat', e.target.value)} style={inputStyle}>
-            {cats.map(c => <option key={c}>{c}</option>)}
-            <option value="__custom__">Add new category...</option>
-          </select>
-          {form.cat === '__custom__' && (
-            <input
-              value={form.customCat || ''}
-              onChange={e => set('customCat', e.target.value)}
-              placeholder="Type new category"
-              style={{ ...inputStyle, marginTop: 8 }}
-            />
-          )}
+          <ModalDropdown
+            value={form.cat}
+            options={categoryOptions}
+            placeholder="Search category"
+            onChange={value => set('cat', value)}
+          />
         </div>
 
         <label style={{
@@ -193,18 +282,12 @@ export default function ProductModal({ product, preset = null, products = [], on
               <label style={{ display: 'block', fontSize: 12, color: '#666', marginBottom: 4 }}>
                 Consumes stock item <span style={{ color: '#aaa', fontWeight: 400 }}>(optional)</span>
               </label>
-              <select
-                value={form.consumesProductId || ''}
-                onChange={e => set('consumesProductId', e.target.value)}
-                style={inputStyle}
-              >
-                <option value="">No stock deduction</option>
-                {stockProducts.map(item => (
-                  <option key={item.id} value={item.id}>
-                    {item.name} ({item.qty} {item.unit || 'units'})
-                  </option>
-                ))}
-              </select>
+              <ModalDropdown
+                value={String(form.consumesProductId || '')}
+                options={stockProductOptions}
+                placeholder="Search stock item"
+                onChange={value => set('consumesProductId', value)}
+              />
             </div>
 
             {form.consumesProductId && (

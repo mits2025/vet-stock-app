@@ -5,12 +5,27 @@ const PAPER_OPTIONS = [
   { value: '58', label: '58mm receipt paper' },
 ]
 
-export default function Settings({ receiptSettings, onSaveReceiptSettings, onExportBackup, onImportBackup }) {
+export default function Settings({
+  receiptSettings,
+  categories = [],
+  products = [],
+  onSaveReceiptSettings,
+  onAddCategory,
+  onRenameCategory,
+  onExportBackup,
+  onImportBackup,
+}) {
   const [draft, setDraft] = useState(receiptSettings)
   const [saved, setSaved] = useState(false)
+  const [warning, setWarning] = useState('')
+  const [categorySaved, setCategorySaved] = useState('')
+  const [newCategory, setNewCategory] = useState('')
+  const [selectedCategory, setSelectedCategory] = useState(categories[0] || '')
+  const [renameDraft, setRenameDraft] = useState(categories[0] || '')
 
   function setField(field, value) {
     setSaved(false)
+    setWarning('')
     setDraft(prev => ({ ...prev, [field]: value }))
   }
 
@@ -19,13 +34,13 @@ export default function Settings({ receiptSettings, onSaveReceiptSettings, onExp
     if (!file) return
 
     if (!file.type.startsWith('image/')) {
-      alert('Please choose an image file for the receipt logo.')
+      setWarning('Please choose an image file for the receipt logo.')
       event.target.value = ''
       return
     }
 
     if (file.size > 500 * 1024) {
-      alert('Please use an image smaller than 500KB so backups and receipts stay fast.')
+      setWarning('Please use an image smaller than 500KB so backups and receipts stay fast.')
       event.target.value = ''
       return
     }
@@ -54,6 +69,50 @@ export default function Settings({ receiptSettings, onSaveReceiptSettings, onExp
     setTimeout(() => setSaved(false), 2200)
   }
 
+  function submitNewCategory(event) {
+    event.preventDefault()
+    const cleanName = newCategory.trim()
+    if (!cleanName) {
+      setWarning('Enter a category name before adding it.')
+      return
+    }
+    const added = onAddCategory?.(cleanName)
+    if (!added) {
+      setWarning('That category already exists.')
+      return
+    }
+    setNewCategory('')
+    setCategorySaved('Category added')
+    setTimeout(() => setCategorySaved(''), 2200)
+  }
+
+  function submitRenameCategory(event) {
+    event.preventDefault()
+    if (!selectedCategory) {
+      setWarning('Choose a category to rename.')
+      return
+    }
+    const cleanName = renameDraft.trim()
+    if (!cleanName) {
+      setWarning('Enter the new category name.')
+      return
+    }
+    const renamed = onRenameCategory?.(selectedCategory, cleanName)
+    if (!renamed) {
+      setWarning('That category name already exists.')
+      return
+    }
+    setSelectedCategory(cleanName)
+    setRenameDraft(cleanName)
+    setCategorySaved('Category renamed')
+    setTimeout(() => setCategorySaved(''), 2200)
+  }
+
+  const categoryUsage = categories.reduce((map, category) => ({
+    ...map,
+    [category]: products.filter(product => product.cat === category).length,
+  }), {})
+
   return (
     <div className="settings-page">
       <section className="sales-report-header">
@@ -72,6 +131,13 @@ export default function Settings({ receiptSettings, onSaveReceiptSettings, onExp
           </div>
           {saved && <span className="settings-saved">Saved</span>}
         </div>
+
+        {warning && (
+          <div className="modal-friendly-alert" role="alert">
+            <i className="fi fi-rr-triangle-warning" aria-hidden="true"></i>
+            <span>{warning}</span>
+          </div>
+        )}
 
         <div className="settings-form-grid">
           <label>
@@ -163,6 +229,65 @@ export default function Settings({ receiptSettings, onSaveReceiptSettings, onExp
           Save receipt settings
         </button>
       </form>
+
+      <section className="settings-panel">
+        <div className="panel-heading">
+          <div>
+            <span className="eyebrow">Product categories</span>
+            <h4>Manage category names</h4>
+          </div>
+          {categorySaved && <span className="settings-saved">{categorySaved}</span>}
+        </div>
+
+        <div className="category-settings-grid">
+          <form className="category-settings-card" onSubmit={submitNewCategory}>
+            <label>
+              Add category
+              <input
+                value={newCategory}
+                onChange={event => {
+                  setWarning('')
+                  setNewCategory(event.target.value)
+                }}
+                placeholder="New category name"
+              />
+            </label>
+            <button type="submit" className="settings-backup-button export">Add category</button>
+          </form>
+
+          <form className="category-settings-card" onSubmit={submitRenameCategory}>
+            <label>
+              Category to edit
+              <select
+                value={selectedCategory}
+                onChange={event => {
+                  setWarning('')
+                  setSelectedCategory(event.target.value)
+                  setRenameDraft(event.target.value)
+                }}
+              >
+                {categories.map(category => (
+                  <option key={category} value={category}>
+                    {category} ({categoryUsage[category] || 0})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Rename to
+              <input
+                value={renameDraft}
+                onChange={event => {
+                  setWarning('')
+                  setRenameDraft(event.target.value)
+                }}
+                placeholder="Updated category name"
+              />
+            </label>
+            <button type="submit" className="settings-backup-button import">Save category name</button>
+          </form>
+        </div>
+      </section>
 
       <section className="settings-panel">
         <div className="panel-heading">

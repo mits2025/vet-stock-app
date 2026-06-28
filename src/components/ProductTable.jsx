@@ -174,7 +174,7 @@ export default function ProductTable({ products, onEdit, onDelete, onRestock, on
                       {canUndo && (
                         <button type="button" onClick={() => onUndo(product)} className="undo">Undo</button>
                       )}
-                      <button type="button" onClick={() => onDelete(product.id)} className="delete">Delete</button>
+                      <button type="button" onClick={() => onDelete(product)} className="delete">Delete</button>
                     </div>
                   </td>
                 </tr>

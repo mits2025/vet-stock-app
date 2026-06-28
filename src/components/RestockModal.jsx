@@ -9,14 +9,21 @@ export default function RestockModal({ product, onSave, onClose }) {
   const [qtyToAdd, setQtyToAdd] = useState('')
   const [note, setNote]         = useState('')
   const [deliveryDate, setDeliveryDate] = useState(localDateString)
+  const [warning, setWarning] = useState('')
 
   const added       = Number(qtyToAdd) || 0
   const newTotal    = product.qty + added
   const isValid     = added > 0 && deliveryDate !== ''
 
   function handleSave() {
-    if (added <= 0) return alert('Please enter the quantity you received.')
-    if (!deliveryDate) return alert('Please select the delivery date.')
+    if (added <= 0) {
+      setWarning('Enter the quantity received before confirming restock.')
+      return
+    }
+    if (!deliveryDate) {
+      setWarning('Select the delivery date before confirming restock.')
+      return
+    }
 
     const restockEntry = {
       date:      new Date(`${deliveryDate}T12:00:00`).toISOString(),
@@ -54,6 +61,13 @@ export default function RestockModal({ product, onSave, onClose }) {
           <div style={{ fontSize: 13, color: '#666' }}>{product.name}</div>
         </div>
 
+        {warning && (
+          <div className="modal-friendly-alert" role="alert">
+            <i className="fi fi-rr-triangle-warning" aria-hidden="true"></i>
+            <span>{warning}</span>
+          </div>
+        )}
+
         {/* Current stock info */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 16 }}>
           <div style={{ background: '#f5f5f5', borderRadius: 8, padding: '10px 12px' }}>
@@ -78,7 +92,7 @@ export default function RestockModal({ product, onSave, onClose }) {
           <input
             type="number" min="1"
             value={qtyToAdd}
-            onChange={e => setQtyToAdd(e.target.value)}
+            onChange={e => { setWarning(''); setQtyToAdd(e.target.value) }}
             placeholder="e.g. 50"
             autoFocus
             style={{ ...inputStyle, border: '2px solid #185FA5' }}
@@ -93,7 +107,7 @@ export default function RestockModal({ product, onSave, onClose }) {
           <input
             type="date"
             value={deliveryDate}
-            onChange={e => setDeliveryDate(e.target.value)}
+            onChange={e => { setWarning(''); setDeliveryDate(e.target.value) }}
             max={localDateString()}
             style={inputStyle}
           />
