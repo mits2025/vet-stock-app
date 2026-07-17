@@ -142,6 +142,9 @@ export default function SalesReport({
     }, {})
 
     const grossSales = periodSales.reduce((sum, sale) => sum + (Number(sale.total) || 0), 0)
+    const costOfGoods = periodSales.reduce((sum, sale) => sum + (sale.items || []).reduce((itemSum, item) => (
+      itemSum + (Number(item.qty) || 0) * (Number(item.costPrice) || 0)
+    ), 0), 0)
     const totalExpenses = periodExpenses.reduce((sum, expense) => sum + (Number(expense.amount) || 0), 0)
     const cashSales = getPaidByGroup(periodSales, 'Cash')
     const eCashSales = getPaidByGroup(periodSales, 'E-cash')
@@ -154,6 +157,8 @@ export default function SalesReport({
       expenses: periodExpenses,
       salesByMethod,
       grossSales,
+      costOfGoods,
+      grossProfit: grossSales - costOfGoods,
       totalExpenses,
       cashSales,
       eCashSales,
@@ -195,6 +200,9 @@ export default function SalesReport({
     }, {})
 
     const grossSales = periodSales.reduce((sum, sale) => sum + (Number(sale.total) || 0), 0)
+    const costOfGoods = periodSales.reduce((sum, sale) => sum + (sale.items || []).reduce((itemSum, item) => (
+      itemSum + (Number(item.qty) || 0) * (Number(item.costPrice) || 0)
+    ), 0), 0)
     const totalExpenses = periodExpenses.reduce((sum, expense) => sum + (Number(expense.amount) || 0), 0)
     const pendingBalance = periodSales.reduce((sum, sale) => sum + (Number(sale.pendingBalance) || 0), 0)
     const paidSales = getPaidByGroup(periodSales, 'Cash') + getPaidByGroup(periodSales, 'E-cash')
@@ -210,6 +218,9 @@ export default function SalesReport({
         .sort((a, b) => b.total - a.total)
         .slice(0, 6),
       grossSales,
+      costOfGoods,
+      grossProfit: grossSales - costOfGoods,
+      netProfit: grossSales - costOfGoods - totalExpenses,
       totalExpenses,
       paidSales,
       pendingBalance,
@@ -567,14 +578,24 @@ export default function SalesReport({
                 <small>{ownerReport.pendingBalance > 0 ? `${money(ownerReport.pendingBalance)} pending` : `${ownerReport.sales.length} completed sales`}</small>
               </div>
               <div className="money-card negative">
-                <span>Expenses</span>
-                <strong>{money(ownerReport.totalExpenses)}</strong>
-                <small>{ownerReport.expenses.length} recorded costs</small>
+                <span>Cost of goods</span>
+                <strong>{money(ownerReport.costOfGoods)}</strong>
+                <small>Original cost of products sold</small>
+              </div>
+              <div className={ownerReport.grossProfit < 0 ? 'money-card net negative' : 'money-card net'}>
+                <span>Gross profit</span>
+                <strong>{money(ownerReport.grossProfit)}</strong>
+                <small>Gross sales minus product costs</small>
               </div>
               <div className={ownerReport.netRevenue < 0 ? 'money-card net negative' : 'money-card net'}>
                 <span>Net collected</span>
                 <strong>{money(ownerReport.netRevenue)}</strong>
                 <small>{money(ownerReport.paidSales)} collected minus expenses</small>
+              </div>
+              <div className={ownerReport.netProfit < 0 ? 'money-card net negative' : 'money-card cash'}>
+                <span>Net profit</span>
+                <strong>{money(ownerReport.netProfit)}</strong>
+                <small>Gross profit minus {money(ownerReport.totalExpenses)} expenses</small>
               </div>
               <div className="money-card cash">
                 <span>Average sale</span>

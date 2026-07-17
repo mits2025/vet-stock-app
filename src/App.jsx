@@ -10,7 +10,7 @@ import POS from './components/POS'
 import SalesReport from './components/SalesReport'
 import ClientHistory from './components/ClientHistory'
 import Settings from './components/Settings'
-import { DEFAULT_CATEGORIES, DEFAULT_RECEIPT_SETTINGS, loadClinicRecords, loadClinicRecordsAsync, saveClinicRecordsAsync } from './utils/storage'
+import { DEFAULT_CATEGORIES, DEFAULT_RECEIPT_SETTINGS, loadClinicRecords, loadClinicRecordsAsync, saveClinicRecordAsync, saveClinicRecordsAsync } from './utils/storage'
 import {
   activateLicense,
   getInstallationId,
@@ -83,8 +83,8 @@ export default function App() {
   const [storageReady, setStorageReady] = useState(false)
   const [navCollapsed, setNavCollapsed] = useState(false)
   const [openingCashPrompt, setOpeningCashPrompt] = useState('')
-  const [orders, setOrders] = useState([])
-  const [activeOrderId, setActiveOrderId] = useState('')
+  const [orders, setOrders] = useState(clinicRecordsLoaded.orders)
+  const [activeOrderId, setActiveOrderId] = useState(clinicRecordsLoaded.activeOrderId)
   const [passwordRecord, setPasswordRecord] = useState(() => {
     const saved = localStorage.getItem(PASSWORD_KEY)
     return saved ? JSON.parse(saved) : null
@@ -147,6 +147,8 @@ export default function App() {
         setCashDrawer(records.cashDrawer)
         setCategories(records.categories)
         setReceiptSettings(records.receiptSettings)
+        setOrders(records.orders)
+        setActiveOrderId(records.activeOrderId)
       })
       .catch(() => {
         if (!active) return
@@ -167,7 +169,7 @@ export default function App() {
 
   useEffect(() => {
     if (!storageReady) return
-    saveClinicRecordsAsync({ products, sales, clients, expenses, cashDrawer, categories, receiptSettings })
+    saveClinicRecordsAsync({ products, sales, clients, expenses, cashDrawer, categories, receiptSettings, orders, activeOrderId })
       .catch(() => {
         setAppNotice({
           title: 'Storage warning',
@@ -175,7 +177,7 @@ export default function App() {
           tone: 'warning',
         })
       })
-  }, [products, sales, clients, expenses, cashDrawer, categories, receiptSettings, storageReady])
+  }, [products, sales, clients, expenses, cashDrawer, categories, receiptSettings, orders, activeOrderId, storageReady])
 
   useEffect(() => {
     if (!passwordRecord) return undefined
@@ -234,24 +236,29 @@ export default function App() {
     const cleanName = name.trim()
     if (!cleanName) return
 
-    setClients(prev => {
-      const existing = prev.find(client => client.name.toLowerCase() === cleanName.toLowerCase())
-      if (existing) {
-        return prev.map(client => client.id === existing.id
+    const existing = clients.find(client => client.name.toLowerCase() === cleanName.toLowerCase())
+    const nextClients = existing
+      ? clients.map(client => client.id === existing.id
           ? { ...client, name: cleanName, lastUsedAt: new Date().toISOString() }
           : client
         )
-      }
-
-      return [
+      : [
         {
           id: Date.now(),
           name: cleanName,
           createdAt: new Date().toISOString(),
           lastUsedAt: new Date().toISOString(),
         },
-        ...prev,
+        ...clients,
       ]
+
+    setClients(nextClients)
+    saveClinicRecordAsync('clients', nextClients).catch(() => {
+      setAppNotice({
+        title: 'Client save warning',
+        message: 'The client was added for this session, but permanent storage could not be updated.',
+        tone: 'warning',
+      })
     })
   }
 

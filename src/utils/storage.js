@@ -24,6 +24,8 @@ const STORAGE_KEYS = {
   cashDrawer: 'vet-cash-drawer',
   categories: 'vet-categories',
   receiptSettings: RECEIPT_SETTINGS_KEY,
+  orders: 'vet-open-orders',
+  activeOrderId: 'vet-active-order-id',
 }
 
 const DEFAULT_RECORDS = {
@@ -34,6 +36,8 @@ const DEFAULT_RECORDS = {
   cashDrawer: {},
   categories: DEFAULT_CATEGORIES,
   receiptSettings: DEFAULT_RECEIPT_SETTINGS,
+  orders: [],
+  activeOrderId: '',
 }
 
 const DATABASE_NAME = 'vet_pos_clinic'
@@ -67,6 +71,8 @@ export function loadClinicRecords() {
     cashDrawer: readJson(STORAGE_KEYS.cashDrawer, DEFAULT_RECORDS.cashDrawer),
     categories: [...new Set([...DEFAULT_CATEGORIES, ...savedCategories, ...productCategories])].sort(),
     receiptSettings: { ...DEFAULT_RECEIPT_SETTINGS, ...receiptSettings },
+    orders: readJson(STORAGE_KEYS.orders, DEFAULT_RECORDS.orders),
+    activeOrderId: readJson(STORAGE_KEYS.activeOrderId, DEFAULT_RECORDS.activeOrderId),
   }
 }
 
@@ -144,6 +150,8 @@ export async function loadClinicRecordsAsync() {
     cashDrawer: await readSqlRecord(db, 'cashDrawer', DEFAULT_RECORDS.cashDrawer),
     categories: [...new Set([...DEFAULT_CATEGORIES, ...savedCategories, ...productCategories])].sort(),
     receiptSettings: { ...DEFAULT_RECEIPT_SETTINGS, ...receiptSettings },
+    orders: await readSqlRecord(db, 'orders', localRecords.orders),
+    activeOrderId: await readSqlRecord(db, 'activeOrderId', localRecords.activeOrderId),
   }
 
   saveClinicRecords(records)
@@ -161,4 +169,15 @@ export async function saveClinicRecordsAsync(records) {
       .filter(recordKey => Object.hasOwn(records, recordKey))
       .map(recordKey => writeSqlRecord(db, recordKey, records[recordKey]))
   )
+}
+
+export async function saveClinicRecordAsync(recordKey, value) {
+  const storageKey = STORAGE_KEYS[recordKey]
+  if (!storageKey) throw new Error(`Unknown clinic record: ${recordKey}`)
+
+  writeJson(storageKey, value)
+
+  const db = await getDatabase()
+  if (!db) return
+  await writeSqlRecord(db, recordKey, value)
 }

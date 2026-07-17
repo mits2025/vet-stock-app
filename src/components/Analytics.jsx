@@ -40,6 +40,7 @@ const DEFAULT_TARGET_DAYS = 28
 const DEAD_STOCK_DAYS = 60
 const OVERSTOCK_REORDER_MULTIPLE = 3
 const LOW_USAGE_WEEKLY_THRESHOLD = 1
+const EXPIRATION_RISK_DAYS = 70
 
 function validDate(value) {
   const date = new Date(value)
@@ -283,6 +284,12 @@ export default function Analytics({ products, onApplyReorderLevels }) {
       .filter(Boolean)
       .sort((a, b) => b - a)[0]
     const isDeadStock = stockValue > 0 && !usedInLast60Days
+    const expirationDate = product.expirationDate
+      ? validDate(`${product.expirationDate}T23:59:59`)
+      : null
+    const daysUntilExpiration = expirationDate
+      ? Math.ceil((expirationDate - now) / DAY_MS)
+      : null
 
     return {
       ...product,
@@ -302,6 +309,9 @@ export default function Analytics({ products, onApplyReorderLevels }) {
       usageValue,
       stockValue,
       isDeadStock,
+      expirationDate,
+      daysUntilExpiration,
+      isExpirationRisk: Number(product.qty) > 0 && daysUntilExpiration !== null && daysUntilExpiration <= EXPIRATION_RISK_DAYS,
       lastUsedDate,
       overstockUnits,
       overstockValue,
@@ -406,6 +416,9 @@ export default function Analytics({ products, onApplyReorderLevels }) {
     .filter(product => product.weeksRemaining !== null)
     .sort((a, b) => a.weeksRemaining - b.weeksRemaining)
   const staleProducts = productMetrics.filter(product => product.isCountOverdue)
+  const expirationRiskProducts = productMetrics
+    .filter(product => product.isExpirationRisk)
+    .sort((a, b) => a.daysUntilExpiration - b.daysUntilExpiration)
   const planningProducts = [...productMetrics]
     .filter(product => product.averageWeeklyUsage > 0 || getStatus(product) !== 'ok')
     .sort((a, b) => {
@@ -955,6 +968,30 @@ export default function Analytics({ products, onApplyReorderLevels }) {
       {activeAnalyticsTab === 'risk' && (
         <>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(280px,1fr))', gap: 14 }}>
+        <div style={{ ...cardStyle, borderColor: expirationRiskProducts.length > 0 ? '#E8A0A0' : '#DDEFE7', background: expirationRiskProducts.length > 0 ? '#FFF5F5' : '#F5FBF8' }}>
+          {sectionTitle(`Expiration risk (${expirationRiskProducts.length})`)}
+          <div style={{ color: '#667789', fontSize: 12, marginBottom: 10 }}>
+            Products already expired or expiring within the next {EXPIRATION_RISK_DAYS} days.
+          </div>
+          {expirationRiskProducts.length > 0 ? expirationRiskProducts.slice(0, 8).map(product => (
+            <div key={product.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 10, padding: '7px 0', borderTop: '1px solid rgba(232, 160, 160, 0.55)', fontSize: 12 }}>
+              <span>
+                <strong>{product.name}</strong>
+                <span style={{ display: 'block', color: '#667789', marginTop: 2 }}>
+                  {product.qty} {product.unit || 'units'} on hand | expires {product.expirationDate.toLocaleDateString('en-PH')}
+                </span>
+              </span>
+              <strong style={{ color: product.daysUntilExpiration < 0 ? '#A32D2D' : '#BA7517', whiteSpace: 'nowrap' }}>
+                {product.daysUntilExpiration < 0
+                  ? `Expired ${Math.abs(product.daysUntilExpiration)}d ago`
+                  : product.daysUntilExpiration === 0 ? 'Expires today' : `${product.daysUntilExpiration} days left`}
+              </strong>
+            </div>
+          )) : (
+            <div style={{ color: '#0F6E56', fontSize: 13 }}>No products expire within the next {EXPIRATION_RISK_DAYS} days.</div>
+          )}
+        </div>
+
         <div style={{ ...cardStyle, borderColor: deadStockValue > 0 ? '#F9C97C' : '#DDEFE7', background: deadStockValue > 0 ? '#FFF9F0' : '#F5FBF8' }}>
           {sectionTitle('Dead stock value')}
           <div style={{ fontSize: 24, fontWeight: 800, color: deadStockValue > 0 ? '#92400E' : '#0F6E56' }}>

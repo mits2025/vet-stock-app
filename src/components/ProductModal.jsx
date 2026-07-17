@@ -82,7 +82,7 @@ export default function ProductModal({ product, preset = null, products = [], ca
   const [form, setForm] = useState(
     isEdit
       ? { trackStock: product.trackStock !== false, ...product, newQty: product.qty }
-      : { name: '', cat: initialCat, qty: '', unit: '', reorder: '', price: '', newQty: '', trackStock: true, ...preset }
+      : { name: '', cat: initialCat, qty: '', unit: '', reorder: '', costPrice: '', price: '', expirationDate: '', newQty: '', trackStock: true, ...preset }
   )
   const [warning, setWarning] = useState('')
 
@@ -145,9 +145,11 @@ export default function ProductModal({ product, preset = null, products = [], ca
       unit:         form.unit.trim(),
       qty:          newQty,
       price:        Math.max(0, Number(form.price) || 0),
+      costPrice:    Math.max(0, Number(form.costPrice) || 0),
       lastQty:      qtyChanged ? oldQty : (form.lastQty ?? newQty),
       sold:         totalSold,
       reorder:      Number(form.reorder) || 0,
+      expirationDate: trackStock ? (form.expirationDate || '') : '',
       consumesProductId: trackStock ? '' : (form.consumesProductId || ''),
       consumptionPerSale: trackStock ? 0 : Math.max(0, Number(form.consumptionPerSale) || 0),
       // Keep last 10 snapshots only
@@ -334,6 +336,33 @@ export default function ProductModal({ product, preset = null, products = [], ca
             placeholder="e.g. 10"
             style={inputStyle}
             disabled={form.trackStock === false}
+          />
+        </div>
+
+        {form.trackStock !== false && (
+          <div style={{ marginBottom: 16 }}>
+            <label style={{ display: 'block', fontSize: 12, color: '#666', marginBottom: 4 }}>
+              Expiration date <span style={{ color: '#aaa', fontWeight: 400 }}>(optional)</span>
+            </label>
+            <input
+              type="date"
+              value={form.expirationDate || ''}
+              onChange={e => set('expirationDate', e.target.value)}
+              style={inputStyle}
+            />
+          </div>
+        )}
+
+        <div style={{ marginBottom: 16 }}>
+          <label style={{ display: 'block', fontSize: 12, color: '#666', marginBottom: 4 }}>
+            Original cost price <span style={{ color: '#aaa', fontWeight: 400 }}>(what you paid)</span>
+          </label>
+          <input
+            type="number" min="0" step="0.01"
+            value={form.costPrice ?? ''}
+            onChange={e => set('costPrice', e.target.value)}
+            placeholder="e.g. 150"
+            style={inputStyle}
           />
         </div>
 
