@@ -1,21 +1,32 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import Dashboard from './components/Dashboard'
 import ProductTable from './components/ProductTable'
 import ProductModal from './components/ProductModal'
 import RestockModal from './components/RestockModal'
 import UndoCountModal from './components/UndoCountModal'
-import Analytics from './components/Analytics'
-import Report from './components/Report'
 import POS from './components/POS'
-import SalesReport from './components/SalesReport'
-import ClientHistory from './components/ClientHistory'
-import Settings from './components/Settings'
-import { DEFAULT_CATEGORIES, DEFAULT_RECEIPT_SETTINGS, loadClinicRecords, loadClinicRecordsAsync, saveClinicRecordAsync, saveClinicRecordsAsync } from './utils/storage'
+import { DEFAULT_CATEGORIES, DEFAULT_RECEIPT_SETTINGS, loadClinicRecords, loadClinicRecordsAsync, saveClinicRecordsAsync } from './utils/storage'
 import {
   activateLicense,
   getInstallationId,
   verifySavedLicense,
 } from './utils/license'
+import {
+  checkPaymentRequest,
+  getPaymentConfig,
+  isPaymentLicensingConfigured,
+  submitPaymentRequest,
+} from './utils/paymentLicensing'
+import { validateCheckoutStock } from './utils/checkout'
+import { localDateString } from './utils/date'
+import { authThrottleStatus, clearAuthThrottle, createPasswordRecord, parsePasswordRecord, recordAuthFailure, verifyPassword } from './utils/auth'
+import { createBackup, MAX_BACKUP_BYTES, parseBackupText } from './utils/backup'
+
+const Analytics = lazy(() => import('./components/Analytics'))
+const Report = lazy(() => import('./components/Report'))
+const SalesReport = lazy(() => import('./components/SalesReport'))
+const ClientHistory = lazy(() => import('./components/ClientHistory'))
+const Settings = lazy(() => import('./components/Settings'))
 
 const tabs = [
   { id: 'pos', label: 'Checkout', short: 'POS', icon: 'fi-rr-shopping-cart' },
@@ -29,24 +40,10 @@ const tabs = [
 
 const PASSWORD_KEY = 'vet-app-password'
 const OWNER_PASSWORD_KEY = 'vet-owner-password'
+const PAYMENT_REQUEST_KEY = 'vet-pos-gcash-payment-request'
 
 function todayKey() {
-  const date = new Date()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${date.getFullYear()}-${month}-${day}`
-}
-
-function createSalt() {
-  const values = new Uint8Array(16)
-  crypto.getRandomValues(values)
-  return Array.from(values, value => value.toString(16).padStart(2, '0')).join('')
-}
-
-async function hashPassword(password, salt) {
-  const encoded = new TextEncoder().encode(`${salt}:${password}`)
-  const digest = await crypto.subtle.digest('SHA-256', encoded)
-  return Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, '0')).join('')
+  return localDateString()
 }
 
 function licenseMessage(reason) {
@@ -58,6 +55,161 @@ function licenseMessage(reason) {
   if (reason.includes('Device date moved backward')) return reason
   if (reason.includes('missing')) return 'License is missing.'
   return 'Invalid license.'
+}
+
+function formatPeso(centavos) {
+  return new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' })
+    .format((Number(centavos) || 0) / 100)
+}
+
+function GcashLicenseIssuer({ installationId, onActivated, compact = false }) {
+  const [config, setConfig] = useState(null)
+  const [configError, setConfigError] = useState('')
+  const [paymentRequest, setPaymentRequest] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem(PAYMENT_REQUEST_KEY) || 'null')
+    } catch {
+      return null
+    }
+  })
+  const [form, setForm] = useState({ customerName: '', plan: 'standard', gcashSenderName: '', gcashReference: '' })
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+
+  useEffect(() => {
+    if (!isPaymentLicensingConfigured()) return
+    let active = true
+    const controller = new AbortController()
+    getPaymentConfig(controller.signal)
+      .then(result => {
+        if (!active) return
+        setConfig(result)
+        setConfigError('')
+        const firstPlan = Object.keys(result.plans || {})[0]
+        if (firstPlan) setForm(current => ({ ...current, plan: firstPlan }))
+      })
+      .catch(() => {
+        if (active) setConfigError('Online GCash licensing is temporarily unavailable. You can still paste a signed license below.')
+      })
+    return () => {
+      active = false
+      controller.abort()
+    }
+  }, [])
+
+  if (!isPaymentLicensingConfigured()) return null
+
+  async function submit(event) {
+    event.preventDefault()
+    if (!installationId) return
+    setBusy(true)
+    setMessage('')
+    try {
+      const result = await submitPaymentRequest({ ...form, installationId })
+      const saved = {
+        requestId: result.requestId,
+        claimToken: result.claimToken,
+        submittedAt: result.submittedAt,
+      }
+      localStorage.setItem(PAYMENT_REQUEST_KEY, JSON.stringify(saved))
+      setPaymentRequest(saved)
+      setMessage('Payment submitted. Send your receipt to the provider, then check again after it is verified.')
+    } catch (error) {
+      setMessage(error.message || 'The payment request could not be submitted.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function checkStatus() {
+    if (!paymentRequest) return
+    setBusy(true)
+    setMessage('')
+    try {
+      const result = await checkPaymentRequest(paymentRequest.requestId, paymentRequest.claimToken)
+      if (result.status === 'approved' && result.licenseToken) {
+        const activation = await activateLicense(result.licenseToken)
+        if (!activation.valid) throw new Error(activation.reason || 'The issued license could not be activated.')
+        localStorage.removeItem(PAYMENT_REQUEST_KEY)
+        setPaymentRequest(null)
+        onActivated()
+        return
+      }
+      if (result.status === 'rejected') {
+        localStorage.removeItem(PAYMENT_REQUEST_KEY)
+        setPaymentRequest(null)
+        setForm(current => ({ ...current, gcashReference: '' }))
+        setMessage(result.rejectionReason || 'The payment request was rejected.')
+        return
+      }
+      setMessage('Payment is still waiting for manual verification.')
+    } catch (error) {
+      setMessage(error.message || 'The payment status could not be checked.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className={compact ? 'gcash-license-panel compact' : 'gcash-license-panel'}>
+      <div className="gcash-license-heading">
+        <div>
+          <span>GCash license issuer</span>
+          <strong>{config?.gcashAccountName || 'Online payment'}</strong>
+          {config?.gcashNumber && <code>{config.gcashNumber}</code>}
+        </div>
+        {config?.gcashQrUrl && (
+          <a href={config.gcashQrUrl} target="_blank" rel="noreferrer" className="gcash-license-qr">
+            <img src={config.gcashQrUrl} alt="Official GCash payment QR code" />
+          </a>
+        )}
+      </div>
+
+      {configError && <p className="gcash-license-message error">{configError}</p>}
+
+      {config && paymentRequest ? (
+        <div className="gcash-license-pending">
+          <p>Request <code>{paymentRequest.requestId}</code> is waiting for verification.</p>
+          <button type="button" className="complete-sale-button" disabled={busy} onClick={checkStatus}>
+            {busy ? 'Checking...' : 'Check payment status'}
+          </button>
+        </div>
+      ) : config ? (
+        <form className="gcash-license-form" onSubmit={submit}>
+          <label>
+            <span>Clinic or customer name</span>
+            <input value={form.customerName} onChange={event => setForm(current => ({ ...current, customerName: event.target.value }))} required />
+          </label>
+          <label>
+            <span>License plan</span>
+            <select value={form.plan} onChange={event => setForm(current => ({ ...current, plan: event.target.value }))}>
+              {Object.entries(config.plans || {}).map(([value, plan]) => (
+                <option value={value} key={value}>{plan.label} — {formatPeso(plan.amountCentavos)}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>GCash sender name</span>
+            <input value={form.gcashSenderName} onChange={event => setForm(current => ({ ...current, gcashSenderName: event.target.value }))} required />
+          </label>
+          <label>
+            <span>GCash reference number</span>
+            <input value={form.gcashReference} onChange={event => setForm(current => ({ ...current, gcashReference: event.target.value }))} required />
+          </label>
+          {config.messageUrl && (
+            <a href={config.messageUrl} target="_blank" rel="noreferrer" className="gcash-message-provider">
+              Send payment receipt to provider
+            </a>
+          )}
+          <button type="submit" className="complete-sale-button" disabled={busy || !installationId}>
+            {busy ? 'Submitting...' : 'Submit payment for verification'}
+          </button>
+        </form>
+      ) : null}
+
+      {message && <p className={message.toLowerCase().includes('rejected') || message.toLowerCase().includes('could not') ? 'gcash-license-message error' : 'gcash-license-message'}>{message}</p>}
+    </section>
+  )
 }
 
 export default function App() {
@@ -86,12 +238,10 @@ export default function App() {
   const [orders, setOrders] = useState(clinicRecordsLoaded.orders)
   const [activeOrderId, setActiveOrderId] = useState(clinicRecordsLoaded.activeOrderId)
   const [passwordRecord, setPasswordRecord] = useState(() => {
-    const saved = localStorage.getItem(PASSWORD_KEY)
-    return saved ? JSON.parse(saved) : null
+    return parsePasswordRecord(localStorage.getItem(PASSWORD_KEY))
   })
   const [ownerPasswordRecord, setOwnerPasswordRecord] = useState(() => {
-    const saved = localStorage.getItem(OWNER_PASSWORD_KEY)
-    return saved ? JSON.parse(saved) : null
+    return parsePasswordRecord(localStorage.getItem(OWNER_PASSWORD_KEY))
   })
   const [isUnlocked, setIsUnlocked] = useState(false)
   const [ownerUnlocked, setOwnerUnlocked] = useState(false)
@@ -110,8 +260,19 @@ export default function App() {
   const [authBusy, setAuthBusy] = useState(false)
   const [ownerAuthBusy, setOwnerAuthBusy] = useState(false)
   const currentDayKey = todayKey()
-  const needsOpeningCash = tab === 'pos' && !cashDrawer[currentDayKey]
   const isActivated = licenseStatus.valid
+  const isReadOnly = !isActivated && licenseStatus.reason === 'License expired.'
+  const needsOpeningCash = !isReadOnly && tab === 'pos' && !cashDrawer[currentDayKey]
+
+  function blockReadOnlyWrite() {
+    if (!isReadOnly) return false
+    setAppNotice({
+      title: 'Read-only mode',
+      message: 'The license has expired. Renew the license to change records or complete sales.',
+      tone: 'warning',
+    })
+    return true
+  }
 
   useEffect(() => {
     let active = true
@@ -168,7 +329,7 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    if (!storageReady) return
+    if (!storageReady || isReadOnly) return
     saveClinicRecordsAsync({ products, sales, clients, expenses, cashDrawer, categories, receiptSettings, orders, activeOrderId })
       .catch(() => {
         setAppNotice({
@@ -177,7 +338,7 @@ export default function App() {
           tone: 'warning',
         })
       })
-  }, [products, sales, clients, expenses, cashDrawer, categories, receiptSettings, orders, activeOrderId, storageReady])
+  }, [products, sales, clients, expenses, cashDrawer, categories, receiptSettings, orders, activeOrderId, storageReady, isReadOnly])
 
   useEffect(() => {
     if (!passwordRecord) return undefined
@@ -200,6 +361,7 @@ export default function App() {
   }, [passwordRecord])
 
   function saveProduct(data) {
+    if (blockReadOnlyWrite()) return
     if (data.id) {
       setProducts(prev => prev.map(product => product.id === data.id ? data : product))
     } else {
@@ -211,16 +373,19 @@ export default function App() {
   }
 
   function saveRestock(data) {
+    if (blockReadOnlyWrite()) return
     setProducts(prev => prev.map(product => product.id === data.id ? data : product))
     setRestockProduct(null)
   }
 
   function saveUndo(data) {
+    if (blockReadOnlyWrite()) return
     setProducts(prev => prev.map(product => product.id === data.id ? data : product))
     setUndoProduct(null)
   }
 
   function applyTrendReorderLevels(updates) {
+    if (blockReadOnlyWrite()) return
     setProducts(prev => prev.map(product => {
       const update = updates.find(item => item.id === product.id)
       if (!update) return product
@@ -233,6 +398,7 @@ export default function App() {
   }
 
   function saveClientName(name) {
+    if (blockReadOnlyWrite()) return
     const cleanName = name.trim()
     if (!cleanName) return
 
@@ -253,16 +419,10 @@ export default function App() {
       ]
 
     setClients(nextClients)
-    saveClinicRecordAsync('clients', nextClients).catch(() => {
-      setAppNotice({
-        title: 'Client save warning',
-        message: 'The client was added for this session, but permanent storage could not be updated.',
-        tone: 'warning',
-      })
-    })
   }
 
   function deleteClientName(name) {
+    if (blockReadOnlyWrite()) return
     const cleanName = name.trim()
     if (!cleanName) return
     const key = cleanName.toLowerCase()
@@ -275,7 +435,7 @@ export default function App() {
     )))
   }
 
-  function completeSale({
+  async function completeSale({
     items,
     paymentMethod,
     payments = [],
@@ -285,6 +445,20 @@ export default function App() {
     discount,
     clientName,
   }) {
+    if (blockReadOnlyWrite()) return null
+    const stockCheck = validateCheckoutStock({ items, products, orders, activeOrderId })
+    if (!stockCheck.valid) {
+      const product = stockCheck.product
+      setAppNotice({
+        title: stockCheck.reason === 'invalid-item' ? 'Checkout stopped' : 'Stock changed before checkout',
+        message: stockCheck.reason === 'invalid-item'
+          ? 'One or more cart items are no longer valid. Refresh the cart and try again.'
+          : `${product?.name || 'An item'} no longer has enough unreserved stock. Review the open orders or restock it, then try again.`,
+        tone: 'warning',
+      })
+      return null
+    }
+
     const subtotal = items.reduce((sum, item) => {
       return sum + (Number(item.lineSubtotal) || Number(item.qty) * Number(item.price))
     }, 0)
@@ -315,7 +489,6 @@ export default function App() {
       subtotal,
       total,
     }
-    if (sale.clientName) saveClientName(sale.clientName)
     const soldById = items.reduce((map, item) => {
       map[item.productId] = (map[item.productId] || 0) + item.qty
       return map
@@ -326,7 +499,7 @@ export default function App() {
       return map
     }, {})
 
-    setProducts(prev => prev.map(product => {
+    const nextProducts = products.map(product => {
       const soldQty = soldById[product.id] || 0
       const consumedQty = consumedById[product.id] || 0
       if (!soldQty && !consumedQty) return product
@@ -340,7 +513,7 @@ export default function App() {
 
       const qtyBefore = Number(product.qty) || 0
       const usedQty = soldQty + consumedQty
-      const qtyAfter = Math.max(0, qtyBefore - usedQty)
+      const qtyAfter = qtyBefore - usedQty
       const saleSnapshot = {
         date: sale.date,
         type: 'sale',
@@ -359,16 +532,54 @@ export default function App() {
         sold: (Number(product.sold) || 0) + usedQty,
         countHistory: [...(product.countHistory || []), saleSnapshot].slice(-20),
       }
-    }))
-    setSales(prev => [sale, ...prev])
+    })
+    const nextSales = [sale, ...sales]
+    const nextClients = sale.clientName
+      ? (() => {
+          const existing = clients.find(client => client.name.toLowerCase() === sale.clientName.toLowerCase())
+          return existing
+            ? clients.map(client => client.id === existing.id ? { ...client, name: sale.clientName, lastUsedAt: sale.date } : client)
+            : [{ id: Date.now() + 1, name: sale.clientName, createdAt: sale.date, lastUsedAt: sale.date }, ...clients]
+        })()
+      : clients
+    const nextOrders = orders.filter(order => order.id !== activeOrderId)
+    const nextActiveOrderId = nextOrders[0]?.id || ''
+
+    try {
+      await saveClinicRecordsAsync({
+        products: nextProducts,
+        sales: nextSales,
+        clients: nextClients,
+        expenses,
+        cashDrawer,
+        categories,
+        receiptSettings,
+        orders: nextOrders,
+        activeOrderId: nextActiveOrderId,
+      })
+    } catch {
+      setAppNotice({
+        title: 'Sale was not saved',
+        message: 'Permanent storage did not confirm the transaction. No stock or sales totals were changed; please try again.',
+        tone: 'warning',
+      })
+      return null
+    }
+
+    setProducts(nextProducts)
+    setSales(nextSales)
+    setClients(nextClients)
+    setOrders(nextOrders)
+    setActiveOrderId(nextActiveOrderId)
     return sale
   }
 
   function addExpense(expense) {
+    if (blockReadOnlyWrite()) return
     setExpenses(prev => [
       {
         id: Date.now(),
-        date: expense.date || new Date().toISOString().slice(0, 10),
+        date: expense.date || localDateString(),
         category: expense.category?.trim() || 'General',
         note: expense.note?.trim() || '',
         paymentMethod: expense.paymentMethod || 'Cash',
@@ -380,17 +591,20 @@ export default function App() {
   }
 
   function deleteExpense(id) {
+    if (blockReadOnlyWrite()) return
     const expense = expenses.find(item => item.id === id)
     if (expense) setDeleteExpenseTarget(expense)
   }
 
   function confirmDeleteExpense() {
+    if (blockReadOnlyWrite()) return
     if (!deleteExpenseTarget) return
     setExpenses(prev => prev.filter(expense => expense.id !== deleteExpenseTarget.id))
     setDeleteExpenseTarget(null)
   }
 
   function setOpeningCash(amount) {
+    if (blockReadOnlyWrite()) return
     const date = todayKey()
     setCashDrawer(prev => ({
       ...prev,
@@ -403,6 +617,7 @@ export default function App() {
   }
 
   function setClosingCash(amount) {
+    if (blockReadOnlyWrite()) return
     const date = todayKey()
     setCashDrawer(prev => ({
       ...prev,
@@ -439,6 +654,7 @@ export default function App() {
   }
 
   function voidSale(saleId, { reason, note }) {
+    if (blockReadOnlyWrite()) return
     const sale = sales.find(item => item.id === saleId)
     if (!sale || sale.voided) return
 
@@ -505,16 +721,19 @@ export default function App() {
   }
 
   function requestDeleteProduct(product) {
+    if (blockReadOnlyWrite()) return
     setDeleteProductTarget(product)
   }
 
   function confirmDeleteProduct() {
+    if (blockReadOnlyWrite()) return
     if (!deleteProductTarget) return
     setProducts(prev => prev.filter(product => product.id !== deleteProductTarget.id))
     setDeleteProductTarget(null)
   }
 
   function addCategory(name) {
+    if (blockReadOnlyWrite()) return false
     const cleanName = name.trim()
     if (!cleanName) return false
     const exists = categories.some(category => category.toLowerCase() === cleanName.toLowerCase())
@@ -524,6 +743,7 @@ export default function App() {
   }
 
   function renameCategory(oldName, nextName) {
+    if (blockReadOnlyWrite()) return false
     const cleanOld = oldName.trim()
     const cleanNext = nextName.trim()
     if (!cleanOld || !cleanNext) return false
@@ -545,18 +765,21 @@ export default function App() {
   }
 
   function openEdit(product) {
+    if (blockReadOnlyWrite()) return
     setProductPreset(null)
     setEditProduct(product)
     setModalOpen(true)
   }
 
   function openNewProduct() {
+    if (blockReadOnlyWrite()) return
     setProductPreset(null)
     setEditProduct(null)
     setModalOpen(true)
   }
 
   function openNewService() {
+    if (blockReadOnlyWrite()) return
     setProductPreset({
       cat: 'Service',
       trackStock: false,
@@ -570,59 +793,51 @@ export default function App() {
   }
 
   function exportBackup() {
-    const data = JSON.stringify({ products, sales, clients, expenses, cashDrawer, categories, receiptSettings }, null, 2)
+    const data = JSON.stringify(createBackup({ products, sales, clients, expenses, cashDrawer, categories, receiptSettings, orders, activeOrderId }), null, 2)
     const blob = new Blob([data], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `vet-pos-backup-${new Date().toISOString().slice(0, 10)}.json`
+    link.download = `vet-pos-backup-${localDateString()}.json`
     link.click()
     URL.revokeObjectURL(url)
   }
 
-  function importBackup(event) {
+  async function importBackup(event) {
+    if (blockReadOnlyWrite()) {
+      event.target.value = ''
+      return
+    }
     const file = event.target.files[0]
     if (!file) return
-
-    const reader = new FileReader()
-    reader.onload = evt => {
-      try {
-        const imported = JSON.parse(evt.target.result)
-        if (Array.isArray(imported)) {
-          setProducts(imported)
-          setCategories([...new Set([...DEFAULT_CATEGORIES, ...imported.map(product => product.cat).filter(Boolean)])].sort())
-          setAppNotice({ title: 'Backup imported', message: `Successfully imported ${imported.length} products.`, tone: 'success' })
-        } else if (Array.isArray(imported.products)) {
-          setProducts(imported.products)
-          setSales(Array.isArray(imported.sales) ? imported.sales : [])
-          setClients(Array.isArray(imported.clients) ? imported.clients : [])
-          setExpenses(Array.isArray(imported.expenses) ? imported.expenses : [])
-          setCashDrawer(imported.cashDrawer && typeof imported.cashDrawer === 'object' ? imported.cashDrawer : {})
-          setCategories([
-            ...new Set([
-              ...DEFAULT_CATEGORIES,
-              ...(Array.isArray(imported.categories) ? imported.categories : []),
-              ...imported.products.map(product => product.cat).filter(Boolean),
-            ]),
-          ].sort())
-          setReceiptSettings(imported.receiptSettings && typeof imported.receiptSettings === 'object'
-            ? { ...DEFAULT_RECEIPT_SETTINGS, ...imported.receiptSettings }
-            : DEFAULT_RECEIPT_SETTINGS
-          )
-          setAppNotice({
-            title: 'Backup imported',
-            message: `Imported ${imported.products.length} products, ${Array.isArray(imported.sales) ? imported.sales.length : 0} sales, ${Array.isArray(imported.clients) ? imported.clients.length : 0} clients, ${Array.isArray(imported.expenses) ? imported.expenses.length : 0} expenses, and cash drawer records.`,
-            tone: 'success',
-          })
-        } else {
-          setAppNotice({ title: 'Invalid backup file', message: 'Please use a valid backup JSON file.', tone: 'warning' })
-        }
-      } catch {
-        setAppNotice({ title: 'Import failed', message: 'Could not read file. Make sure it is a valid JSON backup.', tone: 'warning' })
-      }
-    }
-    reader.readAsText(file)
     event.target.value = ''
+    if (file.size > MAX_BACKUP_BYTES) {
+      setAppNotice({ title: 'Backup is too large', message: 'Choose a Vet POS backup smaller than 25 MB.', tone: 'warning' })
+      return
+    }
+
+    try {
+      const parsed = parseBackupText(await file.text())
+      const { records, summary } = parsed
+      const preview = `Import ${summary.products} products, ${summary.sales} sales, ${summary.clients} clients, ${summary.expenses} expenses, and ${summary.orders} open orders? This replaces the current clinic records.`
+      if (!window.confirm(preview)) return
+      const nextCategories = [...new Set([...DEFAULT_CATEGORIES, ...records.categories, ...records.products.map(product => product.cat).filter(Boolean)])].sort()
+      const nextReceiptSettings = { ...DEFAULT_RECEIPT_SETTINGS, ...records.receiptSettings }
+      const snapshot = { ...records, categories: nextCategories, receiptSettings: nextReceiptSettings }
+      await saveClinicRecordsAsync(snapshot)
+      setProducts(snapshot.products)
+      setSales(snapshot.sales)
+      setClients(snapshot.clients)
+      setExpenses(snapshot.expenses)
+      setCashDrawer(snapshot.cashDrawer)
+      setCategories(snapshot.categories)
+      setReceiptSettings(snapshot.receiptSettings)
+      setOrders(snapshot.orders)
+      setActiveOrderId(snapshot.activeOrderId)
+      setAppNotice({ title: 'Backup imported', message: `Imported the validated backup${parsed.migrated ? ' and upgraded it to the current format' : ''}.`, tone: 'success' })
+    } catch (error) {
+      setAppNotice({ title: 'Import failed', message: error.message || 'The backup could not be validated or saved.', tone: 'warning' })
+    }
   }
 
   async function copyInstallationId() {
@@ -669,8 +884,8 @@ export default function App() {
     event.preventDefault()
     const password = setupPassword.trim()
 
-    if (password.length < 4) {
-      setAuthError('Use at least 4 characters for the app password.')
+    if (password.length < 8) {
+      setAuthError('Use at least 8 characters for the app password.')
       return
     }
 
@@ -683,12 +898,7 @@ export default function App() {
     setAuthError('')
 
     try {
-      const salt = createSalt()
-      const record = {
-        salt,
-        hash: await hashPassword(password, salt),
-        createdAt: new Date().toISOString(),
-      }
+      const record = await createPasswordRecord(password)
       localStorage.setItem(PASSWORD_KEY, JSON.stringify(record))
       setPasswordRecord(record)
       setIsUnlocked(true)
@@ -704,16 +914,28 @@ export default function App() {
   async function submitUnlock(event) {
     event.preventDefault()
     if (!passwordRecord) return
+    const throttle = authThrottleStatus('app')
+    if (throttle.blocked) {
+      setAuthError(`Too many attempts. Try again in ${throttle.retryAfterSeconds} seconds.`)
+      return
+    }
 
     setAuthBusy(true)
     setAuthError('')
 
     try {
-      const hash = await hashPassword(unlockPassword, passwordRecord.salt)
-      if (hash !== passwordRecord.hash) {
-        setAuthError('Incorrect password.')
+      const result = await verifyPassword(unlockPassword, passwordRecord)
+      if (!result.valid) {
+        const failure = recordAuthFailure('app')
+        setAuthError(failure.retryAfterSeconds ? `Too many attempts. Try again in ${failure.retryAfterSeconds} seconds.` : 'Incorrect password.')
         setUnlockPassword('')
         return
+      }
+
+      clearAuthThrottle('app')
+      if (result.upgradedRecord) {
+        localStorage.setItem(PASSWORD_KEY, JSON.stringify(result.upgradedRecord))
+        setPasswordRecord(result.upgradedRecord)
       }
 
       setIsUnlocked(true)
@@ -729,8 +951,8 @@ export default function App() {
     event.preventDefault()
     const password = ownerSetupPassword.trim()
 
-    if (password.length < 4) {
-      setOwnerAuthError('Use at least 4 characters for the owner password.')
+    if (password.length < 8) {
+      setOwnerAuthError('Use at least 8 characters for the owner password.')
       return
     }
 
@@ -743,12 +965,7 @@ export default function App() {
     setOwnerAuthError('')
 
     try {
-      const salt = createSalt()
-      const record = {
-        salt,
-        hash: await hashPassword(password, salt),
-        createdAt: new Date().toISOString(),
-      }
+      const record = await createPasswordRecord(password)
       localStorage.setItem(OWNER_PASSWORD_KEY, JSON.stringify(record))
       setOwnerPasswordRecord(record)
       setOwnerUnlocked(true)
@@ -764,16 +981,28 @@ export default function App() {
   async function submitOwnerUnlock(event) {
     event.preventDefault()
     if (!ownerPasswordRecord) return
+    const throttle = authThrottleStatus('owner')
+    if (throttle.blocked) {
+      setOwnerAuthError(`Too many attempts. Try again in ${throttle.retryAfterSeconds} seconds.`)
+      return
+    }
 
     setOwnerAuthBusy(true)
     setOwnerAuthError('')
 
     try {
-      const hash = await hashPassword(ownerPassword, ownerPasswordRecord.salt)
-      if (hash !== ownerPasswordRecord.hash) {
-        setOwnerAuthError('Incorrect owner password.')
+      const result = await verifyPassword(ownerPassword, ownerPasswordRecord)
+      if (!result.valid) {
+        const failure = recordAuthFailure('owner')
+        setOwnerAuthError(failure.retryAfterSeconds ? `Too many attempts. Try again in ${failure.retryAfterSeconds} seconds.` : 'Incorrect owner password.')
         setOwnerPassword('')
         return
+      }
+
+      clearAuthThrottle('owner')
+      if (result.upgradedRecord) {
+        localStorage.setItem(OWNER_PASSWORD_KEY, JSON.stringify(result.upgradedRecord))
+        setOwnerPasswordRecord(result.upgradedRecord)
       }
 
       setOwnerUnlocked(true)
@@ -811,7 +1040,7 @@ export default function App() {
                 else setOwnerPassword(event.target.value)
               }}
               autoComplete={isSetup ? 'new-password' : 'current-password'}
-              minLength={isSetup ? 4 : undefined}
+              minLength={isSetup ? 8 : undefined}
               required
             />
           </label>
@@ -827,7 +1056,7 @@ export default function App() {
                   setOwnerSetupConfirm(event.target.value)
                 }}
                 autoComplete="new-password"
-                minLength="4"
+                minLength="8"
                 required
               />
             </label>
@@ -848,7 +1077,7 @@ export default function App() {
     )
   }
 
-  if (licenseStatus.loading) {
+  if (!storageReady || licenseStatus.loading) {
     return (
       <main className="app-lock-screen">
         <div className="app-lock-card activation-card">
@@ -856,8 +1085,8 @@ export default function App() {
             <div className="brand-mark">SF</div>
             <div>
               <span className="eyebrow">App activation</span>
-              <h1>Checking license</h1>
-              <p>Please wait while StockFlow POS verifies this installation.</p>
+              <h1>Preparing clinic records</h1>
+              <p>Please wait while Vet POS verifies the license and safely loads saved clinic data.</p>
             </div>
           </div>
         </div>
@@ -865,16 +1094,16 @@ export default function App() {
     )
   }
 
-  if (!isActivated) {
+  if (!isActivated && !isReadOnly) {
     return (
       <main className="app-lock-screen">
-        <form className="app-lock-card activation-card" onSubmit={submitLicense}>
+        <div className="app-lock-card activation-card">
           <div className="app-lock-brand">
             <div className="brand-mark">SF</div>
             <div>
               <span className="eyebrow">App activation</span>
               <h1>Activate this device</h1>
-              <p>Send this installation ID to the license issuer, then paste the signed license below.</p>
+              <p>Pay through GCash, submit your reference number, then activate after payment verification.</p>
             </div>
           </div>
 
@@ -886,29 +1115,41 @@ export default function App() {
             </button>
           </div>
 
-          <label className="client-name-field">
-            <span>License code</span>
-            <input
-              value={licenseInput}
-              onChange={event => {
-                setLicenseError('')
-                setLicenseInput(event.target.value.trim())
-              }}
-              placeholder="Paste SFP1 license"
-              autoComplete="off"
-              required
-              autoFocus
-            />
-          </label>
+          <GcashLicenseIssuer
+            installationId={installationId}
+            onActivated={() => {
+              setLicenseStatus({ loading: false, valid: true, reason: '' })
+              setLicenseInput('')
+            }}
+          />
 
-          {(licenseError || licenseStatus.reason) && (
-            <div className="app-lock-error">{licenseError || licenseStatus.reason}</div>
-          )}
+          <details className="manual-license-details">
+            <summary>Already have a signed license code?</summary>
+            <form className="manual-license-form" onSubmit={submitLicense}>
+              <label className="client-name-field">
+                <span>Signed license code</span>
+                <input
+                  value={licenseInput}
+                  onChange={event => {
+                    setLicenseError('')
+                    setLicenseInput(event.target.value.trim())
+                  }}
+                  placeholder="Paste SFP1 license"
+                  autoComplete="off"
+                  required
+                />
+              </label>
 
-          <button type="submit" className="complete-sale-button" disabled={licenseBusy}>
-            {licenseBusy ? 'Checking license...' : 'Activate app'}
-          </button>
-        </form>
+              {(licenseError || (licenseStatus.reason && licenseStatus.reason !== 'License is missing.')) && (
+                <div className="app-lock-error">{licenseError || licenseStatus.reason}</div>
+              )}
+
+              <button type="submit" className="complete-sale-button" disabled={licenseBusy}>
+                {licenseBusy ? 'Checking license...' : 'Activate pasted license'}
+              </button>
+            </form>
+          </details>
+        </div>
       </main>
     )
   }
@@ -939,7 +1180,7 @@ export default function App() {
                 else setUnlockPassword(event.target.value)
               }}
               autoComplete={isSetup ? 'new-password' : 'current-password'}
-              minLength={isSetup ? 4 : undefined}
+              minLength={isSetup ? 8 : undefined}
               required
               autoFocus
             />
@@ -956,7 +1197,7 @@ export default function App() {
                   setSetupConfirm(event.target.value)
                 }}
                 autoComplete="new-password"
-                minLength="4"
+                minLength="8"
                 required
               />
             </label>
@@ -973,7 +1214,7 @@ export default function App() {
   }
 
   return (
-    <div className={navCollapsed ? 'app-shell nav-collapsed' : 'app-shell'}>
+    <div className={`${navCollapsed ? 'app-shell nav-collapsed' : 'app-shell'}${isReadOnly ? ' license-read-only' : ''}`}>
       <aside className="side-nav">
         <button
           type="button"
@@ -1023,6 +1264,7 @@ export default function App() {
                   setNavCollapsed(true)
                 }}
                 className="primary-action"
+                disabled={isReadOnly}
               >
                 <i className="fi fi-rr-box-open" aria-hidden="true"></i>
                 <span>Add product</span>
@@ -1033,6 +1275,7 @@ export default function App() {
                   setNavCollapsed(true)
                 }}
                 className="service-action"
+                disabled={isReadOnly}
               >
                 <i className="fi fi-rr-stethoscope" aria-hidden="true"></i>
                 <span>Add service</span>
@@ -1043,6 +1286,52 @@ export default function App() {
       </aside>
 
       <main className="main-workspace">
+        {isReadOnly && (
+          <>
+            <form className="license-expired-banner" onSubmit={submitLicense}>
+              <div className="license-expired-copy">
+                <strong>License expired — read-only mode</strong>
+                <span>You can view, search, print, and export records. Renew the license to make changes or complete sales.</span>
+              </div>
+              <div className="license-expired-renewal">
+                <button type="button" className="license-installation-id" onClick={copyInstallationId} disabled={!installationId} title="Copy installation ID">
+                  <span>Installation ID</span>
+                  <strong>{installationId || 'Preparing...'}</strong>
+                  <i className="fi fi-rr-copy" aria-hidden="true"></i>
+                </button>
+                <label>
+                  <span>Renewal license</span>
+                  <input
+                    value={licenseInput}
+                    onChange={event => {
+                      setLicenseError('')
+                      setLicenseInput(event.target.value.trim())
+                    }}
+                    placeholder="Paste SFP1 license"
+                    autoComplete="off"
+                    required
+                  />
+                </label>
+                <button type="submit" className="license-renew-button" disabled={licenseBusy}>
+                  {licenseBusy ? 'Checking...' : 'Renew'}
+                </button>
+              </div>
+              {(licenseError || licenseCopied) && (
+                <div className={licenseError ? 'license-banner-message error' : 'license-banner-message'}>
+                  {licenseError || 'Installation ID copied'}
+                </div>
+              )}
+            </form>
+            <GcashLicenseIssuer
+              compact
+              installationId={installationId}
+              onActivated={() => {
+                setLicenseStatus({ loading: false, valid: true, reason: '' })
+                setLicenseInput('')
+              }}
+            />
+          </>
+        )}
         {tab !== 'pos' && tab !== 'sales-report' && tab !== 'clients' && tab !== 'settings' && <Dashboard products={products} />}
 
         {tab === 'inventory' && (
@@ -1052,6 +1341,7 @@ export default function App() {
             onDelete={requestDeleteProduct}
             onRestock={product => setRestockProduct(product)}
             onUndo={product => setUndoProduct(product)}
+            readOnly={isReadOnly}
           />
         )}
         {tab === 'pos' && (
@@ -1060,17 +1350,19 @@ export default function App() {
             clients={clients}
             orders={orders}
             activeOrderId={activeOrderId}
-            setOrders={setOrders}
+            setOrders={isReadOnly ? blockReadOnlyWrite : setOrders}
             setActiveOrderId={setActiveOrderId}
             onCompleteSale={completeSale}
             receiptSettings={receiptSettings}
             onSaveClient={saveClientName}
             onEditProduct={openEdit}
             onRestockProduct={product => setRestockProduct(product)}
+            readOnly={isReadOnly}
           />
         )}
-        {tab === 'analytics' && <Analytics products={products} onApplyReorderLevels={applyTrendReorderLevels} />}
-        {tab === 'sales-report' && (
+        <Suspense fallback={<div className="screen-loading-state">Loading screen…</div>}>
+          {tab === 'analytics' && <Analytics products={products} onApplyReorderLevels={isReadOnly ? null : applyTrendReorderLevels} />}
+          {tab === 'sales-report' && (
           <SalesReport
             sales={sales}
             expenses={expenses}
@@ -1082,29 +1374,35 @@ export default function App() {
             onVoidSale={voidSale}
             onSetOpeningCash={setOpeningCash}
             onSetClosingCash={setClosingCash}
+            readOnly={isReadOnly}
           />
-        )}
-        {tab === 'clients' && (
+          )}
+          {tab === 'clients' && (
           <ClientHistory
             clients={clients}
             sales={sales}
             receiptSettings={receiptSettings}
             onDeleteClient={deleteClientName}
+            readOnly={isReadOnly}
           />
-        )}
-        {tab === 'report' && <Report products={products} />}
-        {tab === 'settings' && (
+          )}
+          {tab === 'report' && <Report products={products} />}
+          {tab === 'settings' && (
           <Settings
             receiptSettings={receiptSettings}
             categories={categories}
             products={products}
-            onSaveReceiptSettings={setReceiptSettings}
+            onSaveReceiptSettings={settings => {
+              if (!blockReadOnlyWrite()) setReceiptSettings(settings)
+            }}
             onAddCategory={addCategory}
             onRenameCategory={renameCategory}
             onExportBackup={exportBackup}
             onImportBackup={importBackup}
+            readOnly={isReadOnly}
           />
-        )}
+          )}
+        </Suspense>
       </main>
 
       {modalOpen && (

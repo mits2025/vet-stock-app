@@ -5,8 +5,25 @@ import { getUsageInLastDays } from '../utils/usage'
 const statusLabel = { ok: 'OK', low: 'Low stock', critical: 'Critical' }
 const money = value => `PHP ${Number(value || 0).toFixed(2)}`
 const withUnit = (value, unit) => unit ? `${value} ${unit}` : String(value)
+const DAY_MS = 24 * 60 * 60 * 1000
+const EXPIRATION_RISK_DAYS = 70
+const OVERSTOCK_REORDER_MULTIPLE = 3
 
-export default function ProductTable({ products, onEdit, onDelete, onRestock, onUndo }) {
+function daysUntilExpiration(product) {
+  if (!product.expirationDate || Number(product.qty) <= 0) return null
+  const expiration = new Date(`${product.expirationDate}T23:59:59`)
+  if (Number.isNaN(expiration.getTime())) return null
+  return Math.ceil((expiration - new Date()) / DAY_MS)
+}
+
+function isOverstocked(product) {
+  const reorder = Number(product.reorder) || 0
+  return product.trackStock !== false
+    && reorder > 0
+    && Number(product.qty) >= reorder * OVERSTOCK_REORDER_MULTIPLE
+}
+
+export default function ProductTable({ products, onEdit, onDelete, onRestock, onUndo, readOnly = false }) {
   const [search, setSearch] = useState('')
   const [filterCat, setFilterCat] = useState('')
   const [filterStatus, setFilterStatus] = useState('')
@@ -39,6 +56,15 @@ export default function ProductTable({ products, onEdit, onDelete, onRestock, on
           && (!filterStatus || status === filterStatus)
       })
       .sort((a, b) => {
+        const aExpiryDays = daysUntilExpiration(a)
+        const bExpiryDays = daysUntilExpiration(b)
+        const aExpiryRisk = aExpiryDays !== null && aExpiryDays <= EXPIRATION_RISK_DAYS
+        const bExpiryRisk = bExpiryDays !== null && bExpiryDays <= EXPIRATION_RISK_DAYS
+        const aRiskWeight = aExpiryRisk ? 0 : isOverstocked(a) ? 1 : 2
+        const bRiskWeight = bExpiryRisk ? 0 : isOverstocked(b) ? 1 : 2
+        if (aRiskWeight !== bRiskWeight) return aRiskWeight - bRiskWeight
+        if (aExpiryRisk && bExpiryRisk && aExpiryDays !== bExpiryDays) return aExpiryDays - bExpiryDays
+
         const statusWeight = { critical: 0, low: 1, ok: 2 }
         const statusDiff = statusWeight[getStatus(a)] - statusWeight[getStatus(b)]
         if (statusDiff !== 0) return statusDiff
@@ -129,9 +155,13 @@ export default function ProductTable({ products, onEdit, onDelete, onRestock, on
               const needsRestock = tracksStock && (status === 'low' || status === 'critical')
               const canUndo = (product.countHistory && product.countHistory.length > 0)
                 || (product.restockHistory && product.restockHistory.length > 0)
+              const expirationDays = daysUntilExpiration(product)
+              const expirationRisk = expirationDays !== null && expirationDays <= EXPIRATION_RISK_DAYS
+              const overstocked = !expirationRisk && isOverstocked(product)
+              const riskClass = expirationRisk ? ' risk-expiration' : overstocked ? ' risk-overstock' : ''
 
               return (
-                <tr key={product.id} className={`inventory-row status-${status}`}>
+                <tr key={product.id} className={`inventory-row status-${status}${riskClass}`}>
                   <td data-label="Product">
                     <div className="inventory-product-cell">
                       <strong>{product.name}</strong>
@@ -145,7 +175,9 @@ export default function ProductTable({ products, onEdit, onDelete, onRestock, on
                   </td>
                   <td data-label="Price">
                     <strong className={Number(product.price) > 0 ? '' : 'muted-value'}>
-                      {Number(product.price) > 0 ? money(product.price) : 'No price'}
+                      {Number(product.price) > 0
+                        ? `${money(product.price)}${product.priceByWeight ? ` / ${product.weightUnit || 'kg'}` : ''}`
+                        : 'No price'}
                     </strong>
                   </td>
                   <td data-label="Reorder">
@@ -157,7 +189,15 @@ export default function ProductTable({ products, onEdit, onDelete, onRestock, on
                     </strong>
                   </td>
                   <td data-label="Status">
-                    <span className={`inventory-status-pill ${status}`}>{statusLabel[status]}</span>
+                    <div className="inventory-risk-pills">
+                      {expirationRisk && (
+                        <span className="inventory-risk-pill expiration">
+                          {expirationDays < 0 ? `Expired ${Math.abs(expirationDays)}d` : expirationDays === 0 ? 'Expires today' : `Expires in ${expirationDays}d`}
+                        </span>
+                      )}
+                      {overstocked && <span className="inventory-risk-pill overstock">Overstock</span>}
+                      <span className={`inventory-status-pill ${status}`}>{statusLabel[status]}</span>
+                    </div>
                   </td>
                   <td data-label="Actions">
                     <div className="inventory-actions">
@@ -166,15 +206,16 @@ export default function ProductTable({ products, onEdit, onDelete, onRestock, on
                           type="button"
                           onClick={() => onRestock(product)}
                           className={needsRestock ? 'restock urgent' : 'restock'}
+                          disabled={readOnly}
                         >
                           Restock
                         </button>
                       )}
-                      <button type="button" onClick={() => onEdit(product)}>Edit</button>
+                      <button type="button" onClick={() => onEdit(product)} disabled={readOnly}>Edit</button>
                       {canUndo && (
-                        <button type="button" onClick={() => onUndo(product)} className="undo">Undo</button>
+                        <button type="button" onClick={() => onUndo(product)} className="undo" disabled={readOnly}>Undo</button>
                       )}
-                      <button type="button" onClick={() => onDelete(product)} className="delete">Delete</button>
+                      <button type="button" onClick={() => onDelete(product)} className="delete" disabled={readOnly}>Delete</button>
                     </div>
                   </td>
                 </tr>

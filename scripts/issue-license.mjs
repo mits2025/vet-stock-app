@@ -52,7 +52,7 @@ let privateKey
 
 try {
   privateKey = hexToBytes(await readFile(privateKeyPath, 'utf8'))
-} catch (error) {
+} catch {
   console.error(`Could not read signing key at ${privateKeyPath}.`)
   console.error('Run: node scripts/generate-license-keys.mjs')
   process.exit(1)

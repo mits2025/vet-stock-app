@@ -8,6 +8,11 @@ export default defineConfig([
   globalIgnores([
     'dist',
     'android',
+    'release',
+    'installer/windows/output',
+    'installer/windows/payload',
+    '**/.wrangler/**',
+    '**/node_modules/**',
   ]),
   {
     files: ['**/*.{js,jsx}'],
@@ -20,5 +25,15 @@ export default defineConfig([
       globals: globals.browser,
       parserOptions: { ecmaFeatures: { jsx: true } },
     },
+  },
+  {
+    files: ['electron/**/*.cjs', 'server/**/*.cjs', 'tests/**/*.cjs'],
+    extends: [js.configs.recommended],
+    languageOptions: { globals: globals.node },
+  },
+  {
+    files: ['scripts/**/*.mjs', 'tests/**/*.mjs'],
+    extends: [js.configs.recommended],
+    languageOptions: { globals: globals.node },
   },
 ])

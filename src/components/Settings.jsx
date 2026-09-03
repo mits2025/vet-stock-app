@@ -1,9 +1,18 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 const PAPER_OPTIONS = [
   { value: '80', label: '80mm receipt paper' },
   { value: '58', label: '58mm receipt paper' },
 ]
+
+const DEFAULT_UPDATE_STATE = {
+  status: 'unavailable',
+  currentVersion: '',
+  latestVersion: '',
+  progress: 0,
+  releaseNotes: '',
+  message: 'Updates are available in the installed Windows app.',
+}
 
 export default function Settings({
   receiptSettings,
@@ -22,6 +31,22 @@ export default function Settings({
   const [newCategory, setNewCategory] = useState('')
   const [selectedCategory, setSelectedCategory] = useState(categories[0] || '')
   const [renameDraft, setRenameDraft] = useState(categories[0] || '')
+  const [updateState, setUpdateState] = useState(DEFAULT_UPDATE_STATE)
+
+  useEffect(() => {
+    const updater = globalThis.vetPosUpdater
+    if (!updater) return undefined
+    updater.getState().then(setUpdateState).catch(() => {})
+    return updater.onState(setUpdateState)
+  }, [])
+
+  async function handleUpdateAction() {
+    const updater = globalThis.vetPosUpdater
+    if (!updater) return
+    if (updateState.status === 'available') await updater.download()
+    else if (updateState.status === 'downloaded') await updater.install()
+    else await updater.check()
+  }
 
   function setField(field, value) {
     setSaved(false)
@@ -229,6 +254,47 @@ export default function Settings({
           Save receipt settings
         </button>
       </form>
+
+      <section className="settings-panel">
+        <div className="panel-heading">
+          <div>
+            <span className="eyebrow">Software update</span>
+            <h4>Keep Vet POS up to date</h4>
+          </div>
+          {updateState.currentVersion && <span className="settings-version">Version {updateState.currentVersion}</span>}
+        </div>
+
+        <div className="settings-update-row">
+          <div className="settings-update-status">
+            <strong>{updateState.message}</strong>
+            {updateState.latestVersion && updateState.latestVersion !== updateState.currentVersion && (
+              <span>Available version: {updateState.latestVersion}</span>
+            )}
+            {updateState.releaseNotes && <p>{updateState.releaseNotes}</p>}
+            {updateState.status === 'downloading' && (
+              <div className="settings-update-progress" aria-label={`Update download ${updateState.progress}%`}>
+                <span style={{ width: `${updateState.progress}%` }} />
+              </div>
+            )}
+          </div>
+          <button
+            type="button"
+            className="settings-backup-button export"
+            onClick={handleUpdateAction}
+            disabled={['checking', 'downloading', 'installing', 'unavailable'].includes(updateState.status)}
+          >
+            <i className="fi fi-rr-refresh" aria-hidden="true"></i>
+            <span>
+              {updateState.status === 'available' && 'Download update'}
+              {updateState.status === 'downloading' && `Downloading ${updateState.progress}%`}
+              {updateState.status === 'downloaded' && 'Restart to install'}
+              {updateState.status === 'checking' && 'Checking…'}
+              {updateState.status === 'installing' && 'Opening installer…'}
+              {!['available', 'downloading', 'downloaded', 'checking', 'installing'].includes(updateState.status) && 'Check for updates'}
+            </span>
+          </button>
+        </div>
+      </section>
 
       <section className="settings-panel">
         <div className="panel-heading">

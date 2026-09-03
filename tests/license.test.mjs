@@ -51,7 +51,9 @@ test('valid license for matching installation ID', async () => {
 
 test('invalid signature is rejected', async () => {
   const fixture = await createLicense()
-  const tampered = `${fixture.license.slice(0, -1)}A`
+  const signatureStart = fixture.license.lastIndexOf('.') + 1
+  const replacement = fixture.license[signatureStart] === 'A' ? 'B' : 'A'
+  const tampered = `${fixture.license.slice(0, signatureStart)}${replacement}${fixture.license.slice(signatureStart + 1)}`
   const result = await verifyLicenseText(tampered, {
     publicKeyHex: fixture.publicKeyHex,
     installationId: fixture.installationId,

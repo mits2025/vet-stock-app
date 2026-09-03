@@ -1,16 +1,32 @@
-# React + Vite
+# Vet POS
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Vet POS is an offline-first veterinary point-of-sale and inventory application. Its Windows installation runs as a local web application in the computer's default browser at `http://127.0.0.1:4200`.
 
-Currently, two official plugins are available:
+## Development
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```powershell
+npm install
+npm run dev
+```
 
-## React Compiler
+Run the test and production build checks with:
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+```powershell
+npm test
+npm run lint
+npm run build
+```
 
-## Expanding the ESLint configuration
+## Local Windows installer
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+Install Node.js 22 or newer and Inno Setup 6 on the developer PC, then run:
+
+```powershell
+npm run windows:installer
+```
+
+The result is written to `installer\windows\output\Vet-POS-Local-Setup-<version>-x64.exe`.
+
+On the clinic PC, Setup installs a private loopback server, registers it to start with Windows, and creates a Vet POS desktop shortcut. Clinic records are stored in `C:\ProgramData\Vet POS\data\vet-pos.sqlite`. Uninstalling the application preserves that database by default.
+
+See `installer\windows\README.md` for full packaging details and `LICENSE_SETUP.md` for licensing configuration.

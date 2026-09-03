@@ -45,6 +45,12 @@ SFP1.<payload>.<signature>
 
 Paste that into the app activation screen.
 
+## Optional GCash and Cloudflare Issuer
+
+The `vet-pos-licensing-worker/` directory provides the same manual GCash review flow used by ClinicOps. Customers submit their GCash sender name and reference from the activation screen. An administrator verifies the payment at the Worker's `/admin` page, and the Worker returns an installation-bound `SFP1` license that activates automatically when the customer checks the request status.
+
+Follow `vet-pos-licensing-worker/README.md` to create its D1 database, store `ADMIN_API_KEY` and `LICENSE_SIGNING_PRIVATE_KEY_HEX` as Cloudflare secrets, and deploy it. Then set `VITE_LICENSE_SERVICE_URL` before building the app. The Worker signing secret must contain the private key paired with `src/config/licensePublicKey.js`.
+
 ## Expiration
 
 The license payload contains `expiresAt` as `YYYY-MM-DD`.
@@ -68,3 +74,27 @@ However, offline checks cannot fully prevent:
 - Removing the activation screen from a modified APK
 
 The app includes basic rollback detection: if the local date moves backward by more than one day after successful verification, the license is rejected until the device date is corrected.
+
+## Secure Windows Releases
+
+Production installers now require code signing (`forceCodeSigning`). Configure electron-builder's standard `CSC_LINK` and `CSC_KEY_PASSWORD` secrets in the release environment; unsigned installer builds fail instead of silently shipping.
+
+The desktop updater accepts only signed metadata named `Vet-POS-Update-<version>.json` plus a matching `.json.sig`. The JSON must contain `version`, `installer`, and `sha256`. Sign the exact JSON bytes with an offline Ed25519 private key, then configure the installed machines with:
+
+- `UPDATE_METADATA_PUBLIC_KEY_PEM`: the pinned public key in PEM form (a release secret; the workflow embeds only this public key).
+- `UPDATE_METADATA_PRIVATE_KEY_PEM`: the separate metadata-signing private key.
+- `UPDATE_WINDOWS_PUBLISHER`: the expected Authenticode certificate subject/publisher.
+- `CSC_LINK` and `CSC_KEY_PASSWORD`: the standard electron-builder code-signing credentials.
+
+The updater verifies both the offline metadata signature and the downloaded installer's valid Authenticode publisher before launch. Keep the update-signing private key separate from GitHub credentials and from the license-signing key.
+
+## Secure Android Releases
+
+Android now derives `versionName` and `versionCode` from the root `package.json`, enables R8 minification/resource shrinking for release builds, and refuses release assembly without these environment variables:
+
+- `ANDROID_KEYSTORE_PATH`
+- `ANDROID_KEYSTORE_PASSWORD`
+- `ANDROID_KEY_ALIAS`
+- `ANDROID_KEY_PASSWORD`
+
+Use a protected CI environment or local secret manager for these values. Do not commit the keystore or passwords.

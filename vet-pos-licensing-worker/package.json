@@ -1,0 +1,19 @@
+{
+  "name": "vet-pos-licensing-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:local": "wrangler d1 execute vet-pos-licensing-db --local --file=./schema.sql",
+    "db:remote": "wrangler d1 execute vet-pos-licensing-db --remote --file=./schema.sql"
+  },
+  "dependencies": {
+    "@noble/ed25519": "^3.1.0",
+    "@noble/hashes": "^2.2.0"
+  },
+  "devDependencies": {
+    "wrangler": "^4.68.0"
+  }
+}

@@ -42,7 +42,11 @@ const DEFAULT_RECORDS = {
 
 const DATABASE_NAME = 'vet_pos_clinic'
 const RECORD_TABLE = 'app_records'
+const SNAPSHOT_KEY = 'clinicSnapshot'
+const LOCAL_SNAPSHOT_KEY = 'vet-clinic-snapshot-v1'
+const LOCAL_SERVER_HEADER = { 'X-Vet-POS-Client': '1' }
 let dbPromise = null
+let saveQueue = Promise.resolve()
 
 function readJson(key, fallback) {
   try {
@@ -58,30 +62,77 @@ function writeJson(key, value) {
 }
 
 export function loadClinicRecords() {
-  const products = readJson(STORAGE_KEYS.products, DEFAULT_RECORDS.products)
-  const savedCategories = readJson(STORAGE_KEYS.categories, DEFAULT_RECORDS.categories)
+  const snapshot = readJson(LOCAL_SNAPSHOT_KEY, null)
+  if (snapshot && typeof snapshot === 'object') return normalizeRecords(snapshot)
+
+  return normalizeRecords(Object.fromEntries(
+    Object.entries(STORAGE_KEYS).map(([recordKey, storageKey]) => [recordKey, readJson(storageKey, DEFAULT_RECORDS[recordKey])])
+  ))
+}
+
+function normalizeRecords(records = {}) {
+  const products = Array.isArray(records.products) ? records.products.filter(item => !item.stressTest) : DEFAULT_RECORDS.products
+  const savedCategories = Array.isArray(records.categories) ? records.categories : DEFAULT_RECORDS.categories
   const productCategories = products.map(product => product.cat).filter(Boolean)
-  const receiptSettings = readJson(STORAGE_KEYS.receiptSettings, DEFAULT_RECORDS.receiptSettings)
+  const receiptSettings = records.receiptSettings && typeof records.receiptSettings === 'object'
+    ? records.receiptSettings
+    : DEFAULT_RECORDS.receiptSettings
 
   return {
     products,
-    sales: readJson(STORAGE_KEYS.sales, DEFAULT_RECORDS.sales),
-    clients: readJson(STORAGE_KEYS.clients, DEFAULT_RECORDS.clients),
-    expenses: readJson(STORAGE_KEYS.expenses, DEFAULT_RECORDS.expenses),
-    cashDrawer: readJson(STORAGE_KEYS.cashDrawer, DEFAULT_RECORDS.cashDrawer),
+    sales: Array.isArray(records.sales) ? records.sales.filter(item => !item.stressTest) : [],
+    clients: Array.isArray(records.clients) ? records.clients.filter(item => !item.stressTest) : [],
+    expenses: Array.isArray(records.expenses) ? records.expenses : [],
+    cashDrawer: records.cashDrawer && typeof records.cashDrawer === 'object' ? records.cashDrawer : {},
     categories: [...new Set([...DEFAULT_CATEGORIES, ...savedCategories, ...productCategories])].sort(),
     receiptSettings: { ...DEFAULT_RECEIPT_SETTINGS, ...receiptSettings },
-    orders: readJson(STORAGE_KEYS.orders, DEFAULT_RECORDS.orders),
-    activeOrderId: readJson(STORAGE_KEYS.activeOrderId, DEFAULT_RECORDS.activeOrderId),
+    orders: Array.isArray(records.orders) ? records.orders.filter(item => !item.stressTest) : [],
+    activeOrderId: typeof records.activeOrderId === 'string' ? records.activeOrderId : '',
   }
 }
 
+function writeLocalSnapshot(records) {
+  writeJson(LOCAL_SNAPSHOT_KEY, records)
+  // Keep the legacy keys current so existing backups and downgrade recovery work.
+  Object.entries(STORAGE_KEYS).forEach(([recordKey, storageKey]) => writeJson(storageKey, records[recordKey]))
+}
+
 export function saveClinicRecords(records) {
-  Object.entries(STORAGE_KEYS).forEach(([recordKey, storageKey]) => {
-    if (Object.hasOwn(records, recordKey)) {
-      writeJson(storageKey, records[recordKey])
-    }
+  const complete = normalizeRecords({ ...loadClinicRecords(), ...records })
+  writeLocalSnapshot(complete)
+}
+
+async function getDesktopStorage() {
+  return typeof window !== 'undefined' && window.vetPosStorage ? window.vetPosStorage : null
+}
+
+function isLocalServerApp() {
+  if (typeof window === 'undefined' || Capacitor.isNativePlatform() || window.location.protocol !== 'http:') return false
+  return window.location.port === '4200'
+    && (window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost')
+}
+
+async function loadLocalServerSnapshot() {
+  if (!isLocalServerApp()) return undefined
+  try {
+    const response = await fetch('/api/snapshot', { headers: LOCAL_SERVER_HEADER, cache: 'no-store' })
+    if (!response.ok) throw new Error(`Local server returned ${response.status}.`)
+    return (await response.json()).snapshot
+  } catch (error) {
+    console.warn('Vet POS local server storage is unavailable; using browser storage.', error)
+    return undefined
+  }
+}
+
+async function saveLocalServerSnapshot(snapshot) {
+  if (!isLocalServerApp()) return false
+  const response = await fetch('/api/snapshot', {
+    method: 'PUT',
+    headers: { ...LOCAL_SERVER_HEADER, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ snapshot }),
   })
+  if (!response.ok) throw new Error(`Could not save clinic data to the local server (${response.status}).`)
+  return true
 }
 
 async function getDatabase() {
@@ -129,6 +180,29 @@ async function writeSqlRecord(db, recordKey, value) {
 
 export async function loadClinicRecordsAsync() {
   const localRecords = loadClinicRecords()
+  const desktopStorage = await getDesktopStorage()
+  if (desktopStorage) {
+    const snapshot = await desktopStorage.loadSnapshot()
+    if (!snapshot) {
+      await desktopStorage.saveSnapshot(localRecords)
+      return localRecords
+    }
+    const records = normalizeRecords(snapshot)
+    writeLocalSnapshot(records)
+    return records
+  }
+
+  const serverSnapshot = await loadLocalServerSnapshot()
+  if (serverSnapshot !== undefined) {
+    if (!serverSnapshot) {
+      await saveLocalServerSnapshot(localRecords)
+      return localRecords
+    }
+    const records = normalizeRecords(serverSnapshot)
+    writeLocalSnapshot(records)
+    return records
+  }
+
   const db = await getDatabase()
   if (!db) return localRecords
 
@@ -138,46 +212,63 @@ export async function loadClinicRecordsAsync() {
     return localRecords
   }
 
-  const products = await readSqlRecord(db, 'products', DEFAULT_RECORDS.products)
+  const storedSnapshot = await readSqlRecord(db, SNAPSHOT_KEY, null)
+  if (storedSnapshot) {
+    const records = normalizeRecords(storedSnapshot)
+    writeLocalSnapshot(records)
+    return records
+  }
+
+  const products = (await readSqlRecord(db, 'products', DEFAULT_RECORDS.products)).filter(item => !item.stressTest)
   const savedCategories = await readSqlRecord(db, 'categories', DEFAULT_RECORDS.categories)
   const productCategories = products.map(product => product.cat).filter(Boolean)
   const receiptSettings = await readSqlRecord(db, 'receiptSettings', DEFAULT_RECORDS.receiptSettings)
   const records = {
     products,
-    sales: await readSqlRecord(db, 'sales', DEFAULT_RECORDS.sales),
-    clients: await readSqlRecord(db, 'clients', DEFAULT_RECORDS.clients),
+    sales: (await readSqlRecord(db, 'sales', DEFAULT_RECORDS.sales)).filter(item => !item.stressTest),
+    clients: (await readSqlRecord(db, 'clients', DEFAULT_RECORDS.clients)).filter(item => !item.stressTest),
     expenses: await readSqlRecord(db, 'expenses', DEFAULT_RECORDS.expenses),
     cashDrawer: await readSqlRecord(db, 'cashDrawer', DEFAULT_RECORDS.cashDrawer),
     categories: [...new Set([...DEFAULT_CATEGORIES, ...savedCategories, ...productCategories])].sort(),
     receiptSettings: { ...DEFAULT_RECEIPT_SETTINGS, ...receiptSettings },
-    orders: await readSqlRecord(db, 'orders', localRecords.orders),
+    orders: (await readSqlRecord(db, 'orders', localRecords.orders)).filter(item => !item.stressTest),
     activeOrderId: await readSqlRecord(db, 'activeOrderId', localRecords.activeOrderId),
   }
 
-  saveClinicRecords(records)
+  writeLocalSnapshot(records)
+  await writeSnapshotTransaction(db, records)
   return records
 }
 
-export async function saveClinicRecordsAsync(records) {
-  saveClinicRecords(records)
+async function writeSnapshotTransaction(db, records) {
+  await db.execute('BEGIN IMMEDIATE TRANSACTION;')
+  try {
+    await writeSqlRecord(db, SNAPSHOT_KEY, records)
+    await db.execute('COMMIT;')
+  } catch (error) {
+    await db.execute('ROLLBACK;').catch(() => {})
+    throw error
+  }
+}
 
-  const db = await getDatabase()
-  if (!db) return
-
-  await Promise.all(
-    Object.keys(STORAGE_KEYS)
-      .filter(recordKey => Object.hasOwn(records, recordKey))
-      .map(recordKey => writeSqlRecord(db, recordKey, records[recordKey]))
-  )
+export function saveClinicRecordsAsync(records) {
+  const snapshot = normalizeRecords(records)
+  writeLocalSnapshot(snapshot)
+  const operation = async () => {
+    const desktopStorage = await getDesktopStorage()
+    if (desktopStorage) return desktopStorage.saveSnapshot(snapshot)
+    if (await saveLocalServerSnapshot(snapshot)) return
+    const db = await getDatabase()
+    if (db) await writeSnapshotTransaction(db, snapshot)
+  }
+  saveQueue = saveQueue.catch(() => {}).then(operation)
+  return saveQueue
 }
 
 export async function saveClinicRecordAsync(recordKey, value) {
   const storageKey = STORAGE_KEYS[recordKey]
   if (!storageKey) throw new Error(`Unknown clinic record: ${recordKey}`)
 
-  writeJson(storageKey, value)
-
-  const db = await getDatabase()
-  if (!db) return
-  await writeSqlRecord(db, recordKey, value)
+  const records = { ...loadClinicRecords(), [recordKey]: value }
+  return saveClinicRecordsAsync(records)
 }

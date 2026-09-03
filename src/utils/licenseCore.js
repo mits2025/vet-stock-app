@@ -1,4 +1,10 @@
-import { verifyAsync } from '@noble/ed25519'
+import { hashes, verify } from '@noble/ed25519'
+import { sha512 } from '@noble/hashes/sha2.js'
+
+// Android System WebView versions on older tablets may not implement
+// crypto.subtle.importKey('Ed25519'). Configure Noble's pure-JS verifier so
+// offline license checks do not depend on that Web Crypto operation.
+hashes.sha512 = sha512
 
 const LICENSE_PREFIX = 'SFP1'
 export const LICENSE_PRODUCT = 'stockflow-pos'
@@ -93,7 +99,7 @@ export async function verifyLicenseText(license, {
   try {
     const publicKey = hexToBytes(publicKeyHex)
     const message = new TextEncoder().encode(parsed.signingInput)
-    const signatureOk = await verifyAsync(parsed.signatureBytes, message, publicKey)
+    const signatureOk = verify(parsed.signatureBytes, message, publicKey)
     if (!signatureOk) return { valid: false, reason: 'License signature is invalid.' }
   } catch {
     return { valid: false, reason: 'License signature is invalid.' }

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import { Line } from 'react-chartjs-2'
 import {
   Chart as ChartJS,
@@ -189,7 +189,7 @@ function getRestockReliability(product, plannedLeadTimeDays, now) {
   }
 }
 
-export default function Analytics({ products, onApplyReorderLevels }) {
+function Analytics({ products, onApplyReorderLevels }) {
   const [range, setRange] = useState('12')
   const [copied, setCopied] = useState(false)
   const [copyError, setCopyError] = useState('')
@@ -1253,3 +1253,8 @@ export default function Analytics({ products, onApplyReorderLevels }) {
     </div>
   )
 }
+
+export default memo(Analytics, (previous, next) => (
+  previous.products === next.products
+  && Boolean(previous.onApplyReorderLevels) === Boolean(next.onApplyReorderLevels)
+))

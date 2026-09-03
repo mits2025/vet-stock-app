@@ -1,4 +1,24 @@
 import { useMemo, useState } from 'react'
+import { localDateString } from '../utils/date'
+import { Line } from 'react-chartjs-2'
+import {
+  CategoryScale,
+  Chart as ChartJS,
+  Legend,
+  LinearScale,
+  LineElement,
+  PointElement,
+  Tooltip,
+} from 'chart.js'
+
+ChartJS.register(
+  CategoryScale,
+  Legend,
+  LinearScale,
+  LineElement,
+  PointElement,
+  Tooltip
+)
 
 const money = value => `PHP ${Number(value || 0).toFixed(2)}`
 const signedMoney = value => {
@@ -115,7 +135,7 @@ export default function SalesReport({
     category: '',
     note: '',
     paymentMethod: 'Cash',
-    date: new Date().toISOString().slice(0, 10),
+    date: localDateString(),
   })
   const [voidDraft, setVoidDraft] = useState({
     sale: null,
@@ -123,6 +143,7 @@ export default function SalesReport({
     note: '',
   })
   const [ownerPeriod, setOwnerPeriod] = useState('month')
+  const [trendPeriod, setTrendPeriod] = useState('month')
   const [openingCashDraft, setOpeningCashDraft] = useState(String(openingCash || ''))
   const [closingCashDraft, setClosingCashDraft] = useState(hasClosingCash ? String(closingCash) : '')
   const [warning, setWarning] = useState('')
@@ -229,6 +250,108 @@ export default function SalesReport({
     }
   }, [sales, expenses, ownerPeriod])
 
+  const ownerChartData = useMemo(() => {
+    const now = new Date()
+    const trendSales = sales.filter(sale => !sale.voided && isInOwnerPeriod(sale.date, trendPeriod))
+    const trendExpenses = expenses.filter(expense => isInOwnerPeriod(expense.date || expense.createdAt, trendPeriod))
+    let buckets
+
+    if (trendPeriod === 'month') {
+      const days = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
+      buckets = Array.from({ length: days }, (_, index) => ({
+        key: `${now.getFullYear()}-${now.getMonth()}-${index + 1}`,
+        label: String(index + 1),
+        matches: date => date.getFullYear() === now.getFullYear()
+          && date.getMonth() === now.getMonth()
+          && date.getDate() === index + 1,
+      }))
+    } else if (trendPeriod === 'year') {
+      buckets = Array.from({ length: 12 }, (_, month) => ({
+        key: `${now.getFullYear()}-${month}`,
+        label: new Date(now.getFullYear(), month, 1).toLocaleDateString('en-PH', { month: 'short' }),
+        matches: date => date.getFullYear() === now.getFullYear() && date.getMonth() === month,
+      }))
+    } else {
+      const years = [
+        ...trendSales.map(sale => new Date(sale.date).getFullYear()),
+        ...trendExpenses.map(expense => new Date(expense.date || expense.createdAt).getFullYear()),
+      ].filter(Number.isFinite)
+      const firstYear = years.length ? Math.min(...years) : now.getFullYear()
+      const lastYear = years.length ? Math.max(...years) : now.getFullYear()
+      buckets = Array.from({ length: lastYear - firstYear + 1 }, (_, index) => {
+        const year = firstYear + index
+        return {
+          key: String(year),
+          label: String(year),
+          matches: date => date.getFullYear() === year,
+        }
+      })
+    }
+
+    const totalsFor = (records, dateOf, amountOf) => buckets.map(bucket => records.reduce((sum, record) => {
+      const date = new Date(dateOf(record))
+      return sum + (!Number.isNaN(date.getTime()) && bucket.matches(date) ? amountOf(record) : 0)
+    }, 0))
+    const salesTotals = totalsFor(trendSales, sale => sale.date, sale => Number(sale.total) || 0)
+    const expenseTotals = totalsFor(
+      trendExpenses,
+      expense => expense.date || expense.createdAt,
+      expense => Number(expense.amount) || 0
+    )
+
+    return {
+      trend: {
+        labels: buckets.map(bucket => bucket.label),
+        datasets: [
+          {
+            label: 'Sales',
+            data: salesTotals,
+            borderColor: '#176b5b',
+            backgroundColor: 'rgba(23, 107, 91, 0.14)',
+            tension: 0.3,
+            fill: true,
+          },
+          {
+            label: 'Expenses',
+            data: expenseTotals,
+            borderColor: '#d05a4e',
+            backgroundColor: 'rgba(208, 90, 78, 0.08)',
+            tension: 0.3,
+          },
+        ],
+      },
+    }
+  }, [expenses, sales, trendPeriod])
+
+  const ownerChartOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        position: 'bottom',
+        labels: { usePointStyle: true, boxWidth: 8, padding: 16 },
+      },
+      tooltip: {
+        callbacks: { label: context => `${context.dataset.label || context.label}: ${money(context.raw)}` },
+      },
+    },
+    scales: {
+      y: {
+        beginAtZero: true,
+        grace: '8%',
+        ticks: { callback: value => `PHP ${Number(value).toLocaleString('en-PH')}` },
+      },
+      x: {
+        ticks: {
+          autoSkip: true,
+          maxRotation: 0,
+          maxTicksLimit: trendPeriod === 'month' ? 10 : 12,
+        },
+        grid: { display: false },
+      },
+    },
+  }
+
   function submitExpense(event) {
     event.preventDefault()
     const amount = Number(expenseDraft.amount)
@@ -243,7 +366,7 @@ export default function SalesReport({
       category: '',
       note: '',
       paymentMethod: 'Cash',
-      date: new Date().toISOString().slice(0, 10),
+      date: localDateString(),
     })
   }
 
@@ -604,6 +727,33 @@ export default function SalesReport({
               </div>
             </div>
 
+            <div className="owner-chart-grid">
+              <section className="sales-report-panel owner-chart-panel">
+                <div className="panel-heading compact owner-chart-heading">
+                  <div>
+                    <span className="eyebrow">Business trend</span>
+                    <h4>Sales and expenses</h4>
+                  </div>
+                  <div className="owner-period-tabs trend-period-tabs" aria-label="Business trend period">
+                    {OWNER_PERIODS.map(period => (
+                      <button
+                        key={period.id}
+                        type="button"
+                        className={trendPeriod === period.id ? 'active' : ''}
+                        onClick={() => setTrendPeriod(period.id)}
+                      >
+                        {period.id === 'month' ? 'Month' : period.id === 'year' ? 'Year' : 'All time'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="owner-chart-canvas">
+                  <Line data={ownerChartData.trend} options={ownerChartOptions} />
+                </div>
+              </section>
+
+            </div>
+
             <div className="owner-report-grid">
               <section className="sales-report-panel">
                 <div className="panel-heading compact">
@@ -663,42 +813,6 @@ export default function SalesReport({
                 </div>
               </section>
 
-              <section className="sales-report-panel">
-                <div className="panel-heading compact">
-                  <div>
-                    <span className="eyebrow">Audit</span>
-                    <h4>Recent business activity</h4>
-                  </div>
-                </div>
-                <div className="recent-report-list">
-                  {ownerReport.sales.length === 0 && ownerReport.expenses.length === 0 ? (
-                    <div className="report-empty">No activity in this period.</div>
-                  ) : [
-                    ...ownerReport.sales.slice(0, 4).map(sale => ({
-                      id: `sale-${sale.id}`,
-                      title: sale.clientName || 'Walk-in client',
-                      detail: `${formatDate(sale.date)} | ${summarizeSalePayments(sale)}`,
-                      amount: money(sale.total),
-                      type: 'sale',
-                    })),
-                    ...ownerReport.expenses.slice(0, 4).map(expense => ({
-                      id: `expense-${expense.id}`,
-                      title: expense.category || 'General',
-                      detail: `${formatDate(expense.date || expense.createdAt)} | ${expense.paymentMethod || 'Cash'}`,
-                      amount: `-${money(expense.amount)}`,
-                      type: 'expense',
-                    })),
-                  ].slice(0, 8).map(activity => (
-                    <div key={activity.id} className={activity.type === 'expense' ? 'report-row expense compact-row' : 'report-row compact-row'}>
-                      <div>
-                        <strong>{activity.title}</strong>
-                        <span>{activity.detail}</span>
-                      </div>
-                      <b>{activity.amount}</b>
-                    </div>
-                  ))}
-                </div>
-              </section>
             </div>
           </div>
         )}

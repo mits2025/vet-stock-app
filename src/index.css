@@ -104,7 +104,7 @@ button {
 }
 
 .activation-card {
-  width: min(100%, 470px);
+  width: min(100%, 620px);
 }
 
 .activation-code-box {
@@ -132,6 +132,147 @@ button {
 
 .activation-code-box button {
   width: fit-content;
+}
+
+.manual-license-form,
+.gcash-license-form,
+.gcash-license-pending {
+  display: grid;
+  gap: 10px;
+}
+
+.manual-license-form {
+  padding-top: 0;
+}
+
+.manual-license-details {
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.manual-license-details summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.manual-license-details[open] summary {
+  margin-bottom: 12px;
+}
+
+.gcash-license-panel {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #b9d8d4;
+  border-radius: 14px;
+  background: #f5fbfa;
+}
+
+.gcash-license-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+}
+
+.gcash-license-heading > div {
+  display: grid;
+  gap: 4px;
+}
+
+.gcash-license-heading span {
+  color: #137d72;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.gcash-license-heading strong {
+  font-size: 18px;
+}
+
+.gcash-license-heading code,
+.gcash-license-pending code {
+  overflow-wrap: anywhere;
+}
+
+.gcash-license-qr {
+  flex: 0 0 88px;
+  width: 88px;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 4px 14px rgba(22, 57, 64, .12);
+}
+
+.gcash-license-qr img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.gcash-license-form {
+  grid-template-columns: 1fr 1fr;
+}
+
+.gcash-license-form label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.gcash-license-form input,
+.gcash-license-form select {
+  width: 100%;
+  min-width: 0;
+  height: 40px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: #fff;
+  color: var(--text);
+}
+
+.gcash-license-form .complete-sale-button {
+  grid-column: 1 / -1;
+}
+
+.gcash-message-provider {
+  grid-column: 1 / -1;
+  color: #137d72;
+  font-size: 13px;
+  font-weight: 900;
+  text-align: center;
+}
+
+.gcash-license-message {
+  margin: 0 !important;
+  padding: 9px 11px;
+  border-radius: 8px;
+  background: #e5f4f1;
+  color: #155f58 !important;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.gcash-license-message.error {
+  background: rgba(167, 53, 53, .08);
+  color: var(--danger) !important;
+}
+
+.gcash-license-panel.compact {
+  margin: -8px 0 20px;
+  background: #fff;
+  box-shadow: var(--shadow);
+}
+
+@media (max-width: 620px) {
+  .gcash-license-form { grid-template-columns: 1fr; }
+  .gcash-license-form .complete-sale-button,
+  .gcash-message-provider { grid-column: 1; }
 }
 
 .sales-access-screen {
@@ -685,6 +826,17 @@ button {
   text-transform: uppercase;
 }
 
+.product-tile.expiration-risk {
+  background: #fff1f1;
+  border-color: #df8585;
+  box-shadow: inset 0 0 0 1px rgba(214, 69, 69, 0.22);
+}
+
+.product-tile.expiration-risk .tile-price,
+.product-tile.expiration-risk strong {
+  color: #8f2323;
+}
+
 .category-movement-dropdown {
   margin-top: 9px;
   border: 1px solid var(--line-soft);
@@ -855,6 +1007,16 @@ button {
   background: #fff;
   color: var(--text);
   font-size: 13px;
+}
+
+.expiration-pill {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #f8d2d2;
+  color: #8f2323;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
 }
 
 .product-modal-dropdown {
@@ -1150,6 +1312,51 @@ button {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
+}
+
+.weight-entry-modal {
+  display: grid;
+  gap: 16px;
+}
+
+.weight-entry-field {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.weight-entry-field input {
+  width: 100%;
+  min-height: 48px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.weight-price-preview {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.weight-price-preview span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.weight-price-preview strong {
+  color: var(--primary);
+  font-size: 20px;
 }
 
 .delete-product-modal {
@@ -2006,6 +2213,16 @@ button {
   background: #fffdf8;
 }
 
+.inventory-row.risk-expiration {
+  background: #fff1f1;
+  box-shadow: inset 4px 0 0 #d64545;
+}
+
+.inventory-row.risk-overstock {
+  background: #fff8e8;
+  box-shadow: inset 4px 0 0 #d88919;
+}
+
 .inventory-product-cell {
   display: grid;
   gap: 4px;
@@ -2397,6 +2614,99 @@ button {
   white-space: normal;
 }
 
+.settings-version {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.settings-update-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.settings-update-status {
+  display: grid;
+  flex: 1;
+  gap: 5px;
+  min-width: 0;
+}
+
+.settings-update-status strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.settings-update-status span,
+.settings-update-status p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.settings-update-progress {
+  width: min(100%, 420px);
+  height: 8px;
+  margin-top: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--line-soft);
+}
+
+.settings-update-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary);
+  transition: width .2s ease;
+}
+
+.settings-update-row button:disabled {
+  cursor: wait;
+  opacity: .62;
+}
+
+@media (max-width: 620px) {
+  .settings-update-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .settings-update-row button {
+    width: 100%;
+  }
+}
+
+.inventory-risk-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.inventory-risk-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.inventory-risk-pill.expiration {
+  background: #f8d7d7;
+  color: #8f2323;
+}
+
+.inventory-risk-pill.overstock {
+  background: #fae4bd;
+  color: #80500d;
+}
+
 .receipt-logo-field {
   display: grid;
   gap: 10px;
@@ -2528,6 +2838,7 @@ button {
   color: var(--blue);
   border-color: rgba(37, 99, 169, 0.22);
 }
+
 
 .settings-backup-button:hover {
   filter: brightness(0.98);
@@ -3205,6 +3516,33 @@ button {
   align-items: start;
 }
 
+.owner-chart-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+}
+
+.owner-chart-panel {
+  min-width: 0;
+}
+
+.owner-chart-canvas {
+  position: relative;
+  height: 340px;
+}
+
+.owner-chart-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.trend-period-tabs button {
+  min-height: 32px;
+  padding: 0 10px;
+}
+
 .owner-mini-list {
   display: grid;
   gap: 8px;
@@ -3790,6 +4128,7 @@ button {
   .stock-report-header,
   .owner-report-header,
   .sales-report-layout,
+  .owner-chart-grid,
   .owner-report-grid,
   .opening-cash-panel,
   .shift-close-panel {
@@ -3807,6 +4146,15 @@ button {
     grid-auto-flow: row;
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
+
+  .owner-chart-heading {
+    display: grid;
+  }
+
+  .owner-chart-canvas {
+    height: 290px;
+  }
+
 
   .daily-report-date {
     justify-content: flex-start;
@@ -4028,4 +4376,104 @@ button {
   .receipt-actions {
     display: none;
   }
+}
+.license-expired-banner {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(420px, 1.6fr);
+  gap: 12px 20px;
+  align-items: center;
+  margin: -2px -2px 20px;
+  padding: 14px 18px;
+  border: 1px solid #e4b45f;
+  border-radius: 14px;
+  background: #fff8e8;
+  box-shadow: 0 8px 24px rgba(105, 72, 18, 0.12);
+  color: #62420d;
+}
+
+.license-expired-copy,
+.license-expired-renewal,
+.license-expired-renewal label,
+.license-installation-id {
+  display: flex;
+}
+
+.license-expired-copy,
+.license-expired-renewal label,
+.license-installation-id {
+  flex-direction: column;
+}
+
+.license-expired-copy { gap: 3px; }
+.license-expired-copy strong { font-size: 15px; }
+.license-expired-copy span { font-size: 12px; line-height: 1.4; }
+
+.license-expired-renewal {
+  align-items: end;
+  gap: 8px;
+}
+
+.license-expired-renewal label { flex: 1; gap: 4px; }
+.license-expired-renewal label > span,
+.license-installation-id span { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; }
+.license-expired-renewal input { min-width: 180px; height: 38px; }
+
+.license-installation-id {
+  position: relative;
+  gap: 3px;
+  max-width: 230px;
+  padding: 7px 34px 7px 10px;
+  border: 1px solid #e4c88f;
+  border-radius: 9px;
+  background: #fff;
+  color: #62420d;
+  text-align: left;
+}
+
+.license-installation-id strong { overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
+.license-installation-id i { position: absolute; right: 10px; top: 14px; }
+
+.license-renew-button {
+  height: 38px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 9px;
+  background: #9a6410;
+  color: white;
+  font-weight: 800;
+}
+
+.license-banner-message { grid-column: 1 / -1; font-size: 12px; color: #54721d; }
+.license-banner-message.error { color: #a32d2d; }
+
+.license-read-only .primary-action:disabled,
+.license-read-only .service-action:disabled,
+.license-read-only .inventory-actions button:disabled,
+.license-read-only .product-tile[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: .48;
+}
+
+.license-read-only .settings-panel:not(:last-child),
+.license-read-only .expense-form,
+.license-read-only .opening-cash-form,
+.license-read-only .void-sale-button,
+.license-read-only .client-delete-button {
+  filter: grayscale(.35);
+}
+
+@media (max-width: 900px) {
+  .license-expired-banner { grid-template-columns: 1fr; }
+  .license-expired-renewal { flex-wrap: wrap; align-items: stretch; }
+  .license-installation-id { max-width: none; flex: 1 1 100%; }
+}
+.screen-loading-state {
+  display: grid;
+  min-height: 240px;
+  place-items: center;
+  color: #667789;
+  font-weight: 700;
 }

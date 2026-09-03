@@ -1,0 +1,32 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "vet-pos-licensing",
+  "main": "src/index.js",
+  "compatibility_date": "2026-09-01",
+  "workers_dev": true,
+  "preview_urls": false,
+  "triggers": {
+    "crons": ["17 3 * * *"]
+  },
+  "assets": {
+    "directory": "./public"
+  },
+  "vars": {
+    "PROVIDER_NAME": "Vet POS",
+    "GCASH_ACCOUNT_NAME": "ClinicOps",
+    "GCASH_NUMBER": "+63 993 568 2595",
+    "MESSAGE_URL": "https://www.facebook.com/profile.php?id=61592166312764",
+    "PLAN_LABEL": "Vet POS license (45 days)",
+    "PLAN_PRICE_CENTAVOS": "50000",
+    "LICENSE_DAYS": "45",
+    "PAYMENT_REQUEST_TTL_HOURS": "168",
+    "ALLOWED_ORIGINS": "http://localhost,http://localhost:5173,https://localhost"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "vet-pos-licensing-db",
+      "database_id": "4a98faad-41cd-4d66-9fa8-a8f889b1ebc6"
+    }
+  ]
+}

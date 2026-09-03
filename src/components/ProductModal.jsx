@@ -82,7 +82,7 @@ export default function ProductModal({ product, preset = null, products = [], ca
   const [form, setForm] = useState(
     isEdit
       ? { trackStock: product.trackStock !== false, ...product, newQty: product.qty }
-      : { name: '', cat: initialCat, qty: '', unit: '', reorder: '', costPrice: '', price: '', expirationDate: '', newQty: '', trackStock: true, ...preset }
+      : { name: '', cat: initialCat, qty: '', unit: '', reorder: '', costPrice: '', price: '', priceByWeight: false, weightUnit: 'kg', expirationDate: '', newQty: '', trackStock: true, ...preset }
   )
   const [warning, setWarning] = useState('')
 
@@ -142,10 +142,12 @@ export default function ProductModal({ product, preset = null, products = [], ca
       ...form,
       cat:          category,
       trackStock,
-      unit:         form.unit.trim(),
+      unit:         form.priceByWeight === true ? (form.weightUnit || 'kg') : form.unit.trim(),
       qty:          newQty,
       price:        Math.max(0, Number(form.price) || 0),
       costPrice:    Math.max(0, Number(form.costPrice) || 0),
+      priceByWeight: form.priceByWeight === true,
+      weightUnit: form.priceByWeight === true ? (form.weightUnit || 'kg') : '',
       lastQty:      qtyChanged ? oldQty : (form.lastQty ?? newQty),
       sold:         totalSold,
       reorder:      Number(form.reorder) || 0,
@@ -239,6 +241,7 @@ export default function ProductModal({ product, preset = null, products = [], ca
               </label>
               <input
                 type="number" min="0"
+                step={form.priceByWeight === true ? '0.001' : '1'}
                 value={form.newQty}
                 onChange={e => set('newQty', e.target.value)}
                 style={highlightInput}
@@ -267,6 +270,7 @@ export default function ProductModal({ product, preset = null, products = [], ca
             <label style={{ display: 'block', fontSize: 12, color: '#666', marginBottom: 4 }}>Starting quantity</label>
             <input
               type="number" min="0"
+              step={form.priceByWeight === true ? '0.001' : '1'}
               value={form.qty}
               onChange={e => { set('qty', e.target.value); set('newQty', e.target.value) }}
               style={inputStyle}
@@ -317,11 +321,17 @@ export default function ProductModal({ product, preset = null, products = [], ca
             Unit <span style={{ color: '#aaa', fontWeight: 400 }}>(optional)</span>
           </label>
           <input
-            value={form.unit}
+            value={form.priceByWeight === true ? (form.weightUnit || 'kg') : form.unit}
             onChange={e => set('unit', e.target.value)}
             placeholder="pcs / box / ml / vials / bags"
             style={inputStyle}
+            disabled={form.priceByWeight === true}
           />
+          {form.priceByWeight === true && (
+            <small style={{ display: 'block', marginTop: 4, color: '#0F6E56' }}>
+              Stock uses the same weight unit as sales so checkout deducts the entered weight.
+            </small>
+          )}
         </div>
 
         {/* Reorder level */}
@@ -331,6 +341,7 @@ export default function ProductModal({ product, preset = null, products = [], ca
           </label>
           <input
             type="number" min="0"
+            step={form.priceByWeight === true ? '0.001' : '1'}
             value={form.reorder}
             onChange={e => set('reorder', e.target.value)}
             placeholder="e.g. 10"
@@ -366,10 +377,50 @@ export default function ProductModal({ product, preset = null, products = [], ca
           />
         </div>
 
+        <div style={{ marginBottom: 12 }}>
+          <label style={{ display: 'block', fontSize: 12, color: '#666', marginBottom: 4 }}>
+            Pricing method
+          </label>
+          <select
+            value={form.priceByWeight === true ? 'weight' : 'unit'}
+            onChange={e => {
+              const priceByWeight = e.target.value === 'weight'
+              set('priceByWeight', priceByWeight)
+              if (priceByWeight) set('unit', form.weightUnit || 'kg')
+            }}
+            style={inputStyle}
+          >
+            <option value="unit">Per item / unit</option>
+            <option value="weight">By weight</option>
+          </select>
+        </div>
+
+        {form.priceByWeight === true && (
+          <div style={{ marginBottom: 12 }}>
+            <label style={{ display: 'block', fontSize: 12, color: '#666', marginBottom: 4 }}>
+              Weight unit
+            </label>
+            <select
+              value={form.weightUnit || 'kg'}
+              onChange={e => {
+                set('weightUnit', e.target.value)
+                set('unit', e.target.value)
+              }}
+              style={inputStyle}
+            >
+              <option value="kg">Kilogram (kg)</option>
+              <option value="g">Gram (g)</option>
+              <option value="lb">Pound (lb)</option>
+              <option value="oz">Ounce (oz)</option>
+            </select>
+          </div>
+        )}
+
         {/* Sale price */}
         <div style={{ marginBottom: 16 }}>
           <label style={{ display: 'block', fontSize: 12, color: '#666', marginBottom: 4 }}>
-            Sale price <span style={{ color: '#aaa', fontWeight: 400 }}>(for POS checkout)</span>
+            Sale price {form.priceByWeight === true ? `per ${form.weightUnit || 'kg'}` : ''}
+            <span style={{ color: '#aaa', fontWeight: 400 }}> (for POS checkout)</span>
           </label>
           <input
             type="number" min="0" step="0.01"

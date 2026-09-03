@@ -1,19 +1,35 @@
 import { Fragment, useCallback, useMemo, useState } from 'react'
 import { getUsageInLastDays } from '../utils/usage'
+import { validateCheckoutStock } from '../utils/checkout'
 
 const money = value => `PHP ${Number(value || 0).toFixed(2)}`
 const withUnit = (value, unit) => unit ? `${value} ${unit}` : String(value)
-const priceLabel = item => item.unit ? `${money(item.price)} / ${item.unit}` : money(item.price)
+const priceLabel = item => {
+  const priceUnit = item.priceByWeight ? (item.weightUnit || 'kg') : item.unit
+  return priceUnit ? `${money(item.price)} / ${priceUnit}` : money(item.price)
+}
 const tracksStock = product => product.trackStock !== false
 const consumesStock = product => product.trackStock === false && product.consumesProductId && Number(product.consumptionPerSale) > 0
 const OVERSTOCK_REORDER_MULTIPLE = 3
 const LOW_USAGE_WEEKLY_THRESHOLD = 1
+const DAY_MS = 24 * 60 * 60 * 1000
+const EXPIRATION_RISK_DAYS = 70
 const PAYMENT_OPTIONS = ['Cash', 'GCash', 'Bank transfer', 'Card']
 const SHORT_PAYMENT_OPTIONS = ['GCash', 'Bank transfer', 'Card']
 const discountAmount = (lineSubtotal, value) => {
   const percent = Math.min(100, Math.max(0, Number(value) || 0))
   return lineSubtotal * (percent / 100)
 }
+const daysUntilExpiration = product => {
+  if (!product.expirationDate || Number(product.qty) <= 0) return null
+  const expiration = new Date(`${product.expirationDate}T23:59:59`)
+  if (Number.isNaN(expiration.getTime())) return null
+  return Math.ceil((expiration - new Date()) / DAY_MS)
+}
+const isCheckoutOverstocked = product => tracksStock(product)
+  && Number(product.reorder) > 0
+  && Number(product.qty) >= Number(product.reorder) * OVERSTOCK_REORDER_MULTIPLE
+  && getUsageInLastDays(product) <= LOW_USAGE_WEEKLY_THRESHOLD
 const defaultClientLabel = () => `Client ${new Date().toLocaleString('en-PH', {
   month: 'short',
   day: 'numeric',
@@ -54,6 +70,7 @@ export default function POS({
   onEditProduct,
   onRestockProduct,
   onSaveClient,
+  readOnly = false,
 }) {
   const [search, setSearch] = useState('')
   const [activeCategory, setActiveCategory] = useState('All')
@@ -67,6 +84,10 @@ export default function POS({
   const [receiptSale, setReceiptSale] = useState(null)
   const [notice, setNotice] = useState('')
   const [clearCartConfirmOpen, setClearCartConfirmOpen] = useState(false)
+  const [weightProduct, setWeightProduct] = useState(null)
+  const [weightDraft, setWeightDraft] = useState('')
+  const [weightWarning, setWeightWarning] = useState('')
+  const [checkoutBusy, setCheckoutBusy] = useState(false)
   const activeOrder = orders.find(order => order.id === activeOrderId) || orders[0]
   const cart = activeOrder?.cart || []
   const itemDiscounts = activeOrder?.itemDiscounts || {}
@@ -104,6 +125,15 @@ export default function POS({
   const counterProducts = useMemo(
     () => [...products]
       .sort((a, b) => {
+        const aExpiryDays = daysUntilExpiration(a)
+        const bExpiryDays = daysUntilExpiration(b)
+        const aExpiryRisk = aExpiryDays !== null && aExpiryDays <= EXPIRATION_RISK_DAYS
+        const bExpiryRisk = bExpiryDays !== null && bExpiryDays <= EXPIRATION_RISK_DAYS
+        const aRiskWeight = aExpiryRisk ? 0 : isCheckoutOverstocked(a) ? 1 : 2
+        const bRiskWeight = bExpiryRisk ? 0 : isCheckoutOverstocked(b) ? 1 : 2
+        if (aRiskWeight !== bRiskWeight) return aRiskWeight - bRiskWeight
+        if (aExpiryRisk && bExpiryRisk && aExpiryDays !== bExpiryDays) return aExpiryDays - bExpiryDays
+
         const aAvailable = tracksStock(a) ? Number(a.qty) > 0 : getServiceCapacity(a) > 0
         const bAvailable = tracksStock(b) ? Number(b.qty) > 0 : getServiceCapacity(b) > 0
         const stockDiff = Number(bAvailable) - Number(aAvailable)
@@ -169,6 +199,7 @@ export default function POS({
   }
 
   function addOrderPage() {
+    if (readOnly) return
     const clientName = clientDraftName.trim()
     const label = clientName || defaultClientLabel()
     const order = {
@@ -188,6 +219,7 @@ export default function POS({
   }
 
   function removeOrderPage(orderId) {
+    if (readOnly) return
     if (orders.length === 1) {
       setOrders([])
       setActiveOrderId('')
@@ -203,7 +235,8 @@ export default function POS({
     }
   }
 
-  function addToCart(product) {
+  function addToCart(product, enteredWeight = null) {
+    if (readOnly) return
     if (!activeOrder) {
       setClientModalOpen(true)
       return
@@ -215,12 +248,48 @@ export default function POS({
       return
     }
 
+    if (product.priceByWeight === true && enteredWeight === null) {
+      setWeightProduct(product)
+      setWeightDraft('')
+      setWeightWarning('')
+      return
+    }
+
+    const quantityToAdd = product.priceByWeight === true ? Number(enteredWeight) : 1
+    if (!Number.isFinite(quantityToAdd) || quantityToAdd <= 0) {
+      setWeightWarning('Enter a weight greater than zero.')
+      return
+    }
+
+    const stockAvailable = tracksStock(product) ? (Number(product.qty) || 0) : getServiceCapacity(product)
+    const existingItem = cart.find(item => item.productId === product.id)
+    const requestedTotal = (Number(existingItem?.qty) || 0) + quantityToAdd
+    if (Number.isFinite(stockAvailable) && requestedTotal > stockAvailable) {
+      const stockMessage = `Only ${stockAvailable} ${product.weightUnit || product.unit || 'units'} available.`
+      if (product.priceByWeight === true) setWeightWarning(stockMessage)
+      else setNotice(stockMessage)
+      return
+    }
+
+    const proposedCart = existingItem
+      ? cart.map(item => item.productId === product.id ? { ...item, qty: requestedTotal } : item)
+      : [...cart, { productId: product.id, qty: quantityToAdd }]
+    const stockCheck = validateCheckoutStock({ items: proposedCart, products, orders, activeOrderId })
+    if (!stockCheck.valid) {
+      const sourceName = stockCheck.product?.name || product.name
+      const stockMessage = `${sourceName} does not have enough unreserved stock for this order.`
+      if (product.priceByWeight === true) setWeightWarning(stockMessage)
+      else setNotice(stockMessage)
+      return
+    }
+
     setActiveCart(prev => {
       const existing = prev.find(item => item.productId === product.id)
-      const stockAvailable = tracksStock(product) ? (Number(product.qty) || 0) : getServiceCapacity(product)
       if (existing) {
-        if (Number.isFinite(stockAvailable) && existing.qty >= stockAvailable) return prev
-        return prev.map(item => item.productId === product.id ? { ...item, qty: item.qty + 1 } : item)
+        const nextQty = existing.qty + quantityToAdd
+        return prev.map(item => item.productId === product.id
+          ? { ...item, qty: Math.round(nextQty * 1000) / 1000 }
+          : item)
       }
 
       const consumedProduct = productsById[product.consumesProductId]
@@ -236,19 +305,32 @@ export default function POS({
           consumedProductName: consumedProduct?.name || '',
           consumedProductUnit: consumedProduct?.unit || '',
           consumptionPerSale: Number(product.consumptionPerSale) || 0,
+          priceByWeight: product.priceByWeight === true,
+          weightUnit: product.weightUnit || '',
           price,
           costPrice: Math.max(0, Number(product.costPrice) || 0),
-          qty: 1,
+          qty: Math.round(quantityToAdd * 1000) / 1000,
           stockAvailable,
         },
       ]
     })
+
+    setWeightProduct(null)
+    setWeightDraft('')
+    setWeightWarning('')
+  }
+
+  function confirmWeight(event) {
+    event.preventDefault()
+    if (!weightProduct) return
+    addToCart(weightProduct, weightDraft)
   }
 
   function updateQty(productId, nextQty) {
     setActiveCart(prev => prev.flatMap(item => {
       if (item.productId !== productId) return [item]
-      const qty = Math.max(0, Math.min(Number(nextQty) || 0, item.stockAvailable))
+      const boundedQty = Math.max(0, Math.min(Number(nextQty) || 0, item.stockAvailable))
+      const qty = item.priceByWeight ? Math.round(boundedQty * 1000) / 1000 : boundedQty
       return qty === 0 ? [] : [{ ...item, qty }]
     }))
   }
@@ -272,6 +354,7 @@ export default function POS({
   }
 
   function openCheckout() {
+    if (readOnly) return
     if (!activeOrder) {
       setClientModalOpen(true)
       return
@@ -290,7 +373,8 @@ export default function POS({
     setActiveDiscounts(prev => ({ ...prev, [productId]: value }))
   }
 
-  function checkoutOrder() {
+  async function checkoutOrder() {
+    if (readOnly) return
     if (cart.length === 0) {
       setNotice('Add at least one product to the cart before confirming payment.')
       setCheckoutOpen(false)
@@ -310,6 +394,8 @@ export default function POS({
         productId: item.productId,
         name: item.name,
         unit: item.unit,
+        priceByWeight: item.priceByWeight === true,
+        weightUnit: item.weightUnit || '',
         price: item.price,
         costPrice: Math.max(0, Number(item.costPrice ?? productsById[item.productId]?.costPrice) || 0),
         qty: item.qty,
@@ -336,18 +422,30 @@ export default function POS({
       : [{ method: paymentMethod, amount: total }]
     const salePaymentMethod = payments.length > 1 ? 'Mixed payment' : payments[0]?.method || paymentMethod
 
-    const completedSale = onCompleteSale({
-      items: receiptItems,
-      paymentMethod: salePaymentMethod,
-      payments,
-      pendingBalance,
-      cashReceived: isCashPayment ? cashReceivedAmount : 0,
-      changeDue: isCashPayment ? cashChange : 0,
-      discount: discountTotal,
-      clientName: activeOrder?.clientName?.trim() || '',
-    })
-    if (completedSale) setReceiptSale(completedSale)
-    if (activeOrder) removeOrderPage(activeOrder.id)
+    setCheckoutBusy(true)
+    let completedSale
+    try {
+      completedSale = await onCompleteSale({
+        items: receiptItems,
+        paymentMethod: salePaymentMethod,
+        payments,
+        pendingBalance,
+        cashReceived: isCashPayment ? cashReceivedAmount : 0,
+        changeDue: isCashPayment ? cashChange : 0,
+        discount: discountTotal,
+        clientName: activeOrder?.clientName?.trim() || '',
+      })
+    } catch {
+      setNotice('Checkout could not be saved. Nothing was charged or removed from stock; please try again.')
+      return
+    } finally {
+      setCheckoutBusy(false)
+    }
+    if (!completedSale) {
+      setNotice('Checkout was not completed. Review the stock warning and try again.')
+      return
+    }
+    setReceiptSale(completedSale)
     setCheckoutOpen(false)
     setPaymentMethod('Cash')
     setCashReceived('')
@@ -528,8 +626,8 @@ export default function POS({
             <div className="grand-total"><span>Total</span><strong>{money(total)}</strong></div>
           </div>
 
-          <button onClick={checkoutOrder} className="complete-sale-button" disabled={!canConfirmPayment}>
-            Confirm payment
+          <button onClick={checkoutOrder} className="complete-sale-button" disabled={readOnly || checkoutBusy || !canConfirmPayment}>
+            {checkoutBusy ? 'Saving sale...' : 'Confirm payment'}
           </button>
         </aside>
       </div>
@@ -592,7 +690,7 @@ export default function POS({
             </div>
           )
         })}
-        <button type="button" onClick={openClientModal} className="add-order-tab">
+        <button type="button" onClick={openClientModal} className="add-order-tab" disabled={readOnly}>
           <span className="add-order-plus" aria-hidden="true">+</span>
           <span>Add client</span>
         </button>
@@ -644,21 +742,22 @@ export default function POS({
               const serviceStockLabel = isService ? getStockSourceLabel(product) : ''
               const outOfStock = tracksStock(product) ? Number(product.qty) <= 0 : serviceCapacity <= 0
               const lowStock = tracksStock(product) && Number(product.qty) <= Number(product.reorder)
-              const isOverstocked = tracksStock(product)
-                && Number(product.reorder) > 0
-                && Number(product.qty) >= Number(product.reorder) * OVERSTOCK_REORDER_MULTIPLE
-                && getUsageInLastDays(product) <= LOW_USAGE_WEEKLY_THRESHOLD
+              const expirationDays = daysUntilExpiration(product)
+              const expirationRisk = expirationDays !== null && expirationDays <= EXPIRATION_RISK_DAYS
+              const isOverstocked = !expirationRisk && isCheckoutOverstocked(product)
               const tileClass = [
                 'product-tile',
                 !hasPrice ? 'missing-price' : '',
                 outOfStock ? 'out-of-stock' : '',
+                expirationRisk ? 'expiration-risk' : '',
                 isOverstocked ? 'overstocked' : '',
               ].filter(Boolean).join(' ')
               return (
                 <div
                   key={product.id}
                   role="button"
-                  tabIndex={0}
+                  tabIndex={readOnly ? -1 : 0}
+                  aria-disabled={readOnly}
                   onClick={() => handleProductTile(product)}
                   onKeyDown={event => handleTileKeyDown(event, product)}
                   className={tileClass}
@@ -669,13 +768,15 @@ export default function POS({
                     <span>{isService ? (serviceStockLabel || 'Service') : withUnit(product.qty, product.unit)}</span>
                     {isService
                       ? <span className="service-pill">{Number.isFinite(serviceCapacity) ? `${serviceCapacity} left` : 'Service'}</span>
+                      : expirationRisk
+                      ? <span className="expiration-pill">{expirationDays < 0 ? `Expired ${Math.abs(expirationDays)}d` : expirationDays === 0 ? 'Expires today' : `${expirationDays}d left`}</span>
                       : outOfStock
                       ? <span className="out-stock-pill">Out</span>
                       : isOverstocked
                       ? <span className="overstock-pill">Overstock</span>
                       : lowStock && <span className="low-stock-pill">Low</span>}
                   </span>
-                  <span className="tile-price">{hasPrice ? money(product.price) : 'Set price'}</span>
+                  <span className="tile-price">{hasPrice ? priceLabel(product) : 'Set price'}</span>
                   {outOfStock && (
                     <span className="tile-actions">
                       <button
@@ -684,6 +785,7 @@ export default function POS({
                           event.stopPropagation()
                           if (onEditProduct) onEditProduct(product)
                         }}
+                        disabled={readOnly}
                       >
                         Edit
                       </button>
@@ -694,6 +796,7 @@ export default function POS({
                           event.stopPropagation()
                           if (onRestockProduct) onRestockProduct(product)
                         }}
+                        disabled={readOnly}
                       >
                         Restock
                       </button>
@@ -738,15 +841,16 @@ export default function POS({
                 <strong>{money(item.qty * item.price)}</strong>
               </div>
               <div className="quantity-controls">
-                <button onClick={() => adjustQty(item.productId, -1)}>-</button>
+                <button onClick={() => adjustQty(item.productId, item.priceByWeight ? -0.1 : -1)}>-</button>
                 <input
                   type="number"
-                  min="1"
+                  min={item.priceByWeight ? '0.001' : '1'}
+                  step={item.priceByWeight ? '0.001' : '1'}
                   max={Number.isFinite(item.stockAvailable) ? item.stockAvailable : undefined}
                   value={item.qty}
                   onChange={event => updateQty(item.productId, event.target.value)}
                 />
-                <button onClick={() => adjustQty(item.productId, 1)}>+</button>
+                <button onClick={() => adjustQty(item.productId, item.priceByWeight ? 0.1 : 1)}>+</button>
               </div>
             </div>
           ))}
@@ -756,7 +860,7 @@ export default function POS({
           <div className="grand-total order-summary-total"><span>Total</span><strong>{money(subtotal)}</strong></div>
         </div>
 
-        <button onClick={openCheckout} disabled={cart.length === 0} className="complete-sale-button">
+        <button onClick={openCheckout} disabled={readOnly || cart.length === 0} className="complete-sale-button">
           Checkout
         </button>
       </aside>
@@ -936,6 +1040,63 @@ export default function POS({
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {weightProduct && (
+        <div className="client-modal-backdrop">
+          <form className="client-modal weight-entry-modal" onSubmit={confirmWeight} role="dialog" aria-modal="true" aria-labelledby="weight-modal-title">
+            <div>
+              <span className="eyebrow">Sold by weight</span>
+              <h3 id="weight-modal-title">Enter weight for {weightProduct.name}</h3>
+              <p>
+                Price is {priceLabel(weightProduct)}.
+                {tracksStock(weightProduct) && ` ${withUnit(weightProduct.qty, weightProduct.weightUnit || weightProduct.unit)} available.`}
+              </p>
+            </div>
+            <label className="weight-entry-field">
+              Weight ({weightProduct.weightUnit || 'kg'})
+              <input
+                type="number"
+                min="0.001"
+                step="0.001"
+                max={tracksStock(weightProduct) ? Number(weightProduct.qty) || undefined : undefined}
+                value={weightDraft}
+                onChange={event => {
+                  setWeightDraft(event.target.value)
+                  setWeightWarning('')
+                }}
+                placeholder={`Enter ${weightProduct.weightUnit || 'weight'}`}
+                autoFocus
+              />
+            </label>
+            {weightDraft && Number(weightDraft) > 0 && (
+              <div className="weight-price-preview">
+                <span>Line total</span>
+                <strong>{money(Number(weightDraft) * Number(weightProduct.price))}</strong>
+              </div>
+            )}
+            {weightWarning && (
+              <div className="modal-friendly-alert" role="alert">
+                <i className="fi fi-rr-triangle-warning" aria-hidden="true"></i>
+                <span>{weightWarning}</span>
+              </div>
+            )}
+            <div className="client-modal-actions">
+              <button
+                type="button"
+                className="secondary-page-button"
+                onClick={() => {
+                  setWeightProduct(null)
+                  setWeightDraft('')
+                  setWeightWarning('')
+                }}
+              >
+                Cancel
+              </button>
+              <button type="submit" className="complete-sale-button">Add to order</button>
+            </div>
+          </form>
         </div>
       )}
     </>
